@@ -28,6 +28,7 @@ export interface IngredientMatch {
   japanese_name: string | null;
   cas_no: string | null;
   synonyms: string[];
+  description: string | null;
 }
 
 export interface LookupResponse {
@@ -46,7 +47,7 @@ export async function lookupRegulation(
   // Priority 1: exact INCI match (case-insensitive)
   const { data: exact } = await supabase
     .from("ingredients")
-    .select("id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms")
+    .select("id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms, description")
     .ilike("inci_name", q)
     .limit(1);
 
@@ -55,7 +56,7 @@ export async function lookupRegulation(
     ? { data: null }
     : await supabase
         .from("ingredients")
-        .select("id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms")
+        .select("id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms, description")
         .ilike("korean_name", q)
         .limit(1);
 
@@ -65,7 +66,7 @@ export async function lookupRegulation(
     ? { data: null }
     : await supabase
         .from("ingredients")
-        .select("id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms")
+        .select("id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms, description")
         .ilike("cas_no", `%${q}%`)
         .limit(1);
 
@@ -74,7 +75,7 @@ export async function lookupRegulation(
     ? { data: null }
     : await supabase
         .from("ingredients")
-        .select("id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms")
+        .select("id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms, description")
         .or(
           [
             `inci_name.ilike.%${q}%`,

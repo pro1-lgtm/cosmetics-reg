@@ -29,8 +29,10 @@ interface CanonicalIngredient {
 // ============================================================
 function parseSynonyms(raw: string | null | undefined): string[] {
   if (!raw) return [];
+  // Split on semicolon, newline, slash, or **comma-followed-by-space** only.
+  // Plain commas without space are kept (chemical names like "2,4,5-Trimethyl..." contain them).
   return raw
-    .split(/[,;]/)
+    .split(/[;\n\r/]|,\s+/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }

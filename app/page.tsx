@@ -1,7 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { LookupResponse, CountryLookupResult } from "@/lib/regulations-query";
+
+interface Suggestion {
+  inci_name: string;
+  korean_name: string | null;
+  cas_no: string | null;
+}
 
 export default function Home() {
   const [query, setQuery] = useState("");
@@ -9,17 +15,59 @@ export default function Home() {
   const [response, setResponse] = useState<LookupResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleSearch(e: React.FormEvent) {
-    e.preventDefault();
-    if (query.trim().length < 2) return;
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(-1);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLFormElement>(null);
+
+  // Autocomplete — debounced fetch
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 1) {
+      setSuggestions([]);
+      return;
+    }
+    const ac = new AbortController();
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/autocomplete?q=${encodeURIComponent(q)}`, {
+          signal: ac.signal,
+        });
+        const data = (await res.json()) as Suggestion[];
+        setSuggestions(Array.isArray(data) ? data : []);
+        setActiveIdx(-1);
+      } catch (e) {
+        if ((e as { name?: string }).name !== "AbortError") setSuggestions([]);
+      }
+    }, 120);
+    return () => {
+      clearTimeout(t);
+      ac.abort();
+    };
+  }, [query]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (!containerRef.current?.contains(e.target as Node)) setShowSuggestions(false);
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
+
+  async function runSearch(q: string) {
+    const trimmed = q.trim();
+    if (trimmed.length < 1) return;
     setLoading(true);
     setError(null);
     setResponse(null);
+    setShowSuggestions(false);
     try {
       const res = await fetch("/api/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query: trimmed }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "검색 실패");
@@ -31,6 +79,34 @@ export default function Home() {
     }
   }
 
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    runSearch(query);
+  }
+
+  function pickSuggestion(s: Suggestion) {
+    const pick = s.korean_name ?? s.inci_name;
+    setQuery(pick);
+    setShowSuggestions(false);
+    runSearch(pick);
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!showSuggestions || suggestions.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.min(i + 1, suggestions.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.max(i - 1, -1));
+    } else if (e.key === "Enter" && activeIdx >= 0) {
+      e.preventDefault();
+      pickSuggestion(suggestions[activeIdx]);
+    } else if (e.key === "Escape") {
+      setShowSuggestions(false);
+    }
+  }
+
   return (
     <main className="mx-auto w-full max-w-4xl px-6 py-12">
       <header className="mb-8">
@@ -38,22 +114,56 @@ export default function Home() {
           화장품 원료 규제 검색
         </h1>
         <p className="mt-1 text-sm text-zinc-500">
-          식약처 공공데이터 API (4종) · 총 원료 26K·규제 45K건 (한국·중국·EU·미국·일본·ASEAN·대만·브라질·아르헨티나·캐나다)
+          식약처 공공데이터 API (4종) · 총 원료 26K·규제 55K건 (15개국: 한국·중국·EU·미국·일본·ASEAN·대만·브라질·아르헨티나·캐나다)
         </p>
       </header>
 
-      <form onSubmit={handleSearch} className="mb-8 flex gap-2">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="원료명 (INCI / 한글 / CAS 번호 — 예: Retinol, 레티놀, 68-26-8)"
-          className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
-          autoFocus
-        />
+      <form onSubmit={handleSubmit} className="relative mb-8 flex gap-2" ref={containerRef}>
+        <div className="relative flex-1">
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setShowSuggestions(true);
+            }}
+            onFocus={() => setShowSuggestions(true)}
+            onKeyDown={onKeyDown}
+            placeholder="원료명 (INCI / 한글 / CAS 번호 — 예: Retinol, 레티놀, 68-26-8)"
+            className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+            autoFocus
+            autoComplete="off"
+          />
+          {showSuggestions && suggestions.length > 0 && (
+            <ul className="absolute left-0 right-0 top-full z-10 mt-1 max-h-80 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+              {suggestions.map((s, i) => (
+                <li
+                  key={`${s.inci_name}-${i}`}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    pickSuggestion(s);
+                  }}
+                  onMouseEnter={() => setActiveIdx(i)}
+                  className={`cursor-pointer px-4 py-2 text-sm ${
+                    i === activeIdx
+                      ? "bg-zinc-100 dark:bg-zinc-800"
+                      : "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
+                  }`}
+                >
+                  <div className="text-zinc-900 dark:text-zinc-50">{s.korean_name ?? s.inci_name}</div>
+                  <div className="text-xs text-zinc-500">
+                    {s.inci_name}
+                    {s.cas_no ? ` · CAS ${s.cas_no.split(/\s/)[0]}` : ""}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
         <button
           type="submit"
-          disabled={loading || query.trim().length < 2}
+          disabled={loading || query.trim().length < 1}
           className="rounded-lg bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:opacity-40 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
         >
           {loading ? "검색 중..." : "검색"}
@@ -124,6 +234,11 @@ function IngredientHeader({ ingredient }: { ingredient: NonNullable<LookupRespon
           </>
         )}
       </dl>
+      {ingredient.description && (
+        <p className="mt-3 rounded-md bg-zinc-50 px-3 py-2 text-xs leading-relaxed text-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300">
+          {ingredient.description}
+        </p>
+      )}
       {ingredient.synonyms.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
           {ingredient.synonyms.slice(0, 8).map((s) => (
@@ -249,7 +364,9 @@ function CountryCard({ result }: { result: CountryLookupResult }) {
           <span className="inline-block rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200">
             금지·제한 목록 미수록
           </span>
-          <p className="text-[11px] text-zinc-500">사용제한·금지 데이터에 없음 — 일반 사용 가능 가능성이 높으나, 최종 확인은 공식 원문 권장</p>
+          <p className="text-[11px] text-zinc-500">
+            사용제한·금지 데이터에 없음 — 일반 사용 가능 가능성이 높으나, 최종 확인은 공식 원문 권장
+          </p>
         </div>
       )}
     </article>
