@@ -8,12 +8,13 @@ on:
 jobs:
   crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      MFDS_API_KEY: ${{ secrets.MFDS_API_KEY }}
       CI: "true"
     steps:
       - uses: actions/checkout@v4
@@ -22,8 +23,19 @@ jobs:
           node-version: "24"
           cache: "npm"
       - run: npm ci
-      - name: Run crawlers
+
+      # 주 데이터 소스 — 식약처 공공데이터 API (4종) 전량 재수집
+      - name: Ingest MFDS public-data APIs
+        run: npm run mfds:ingest
+
+      # 보조 소스 — HTML 크롤러 (US FDA 등). 해시 비교로 변경 감지만, 파싱은 다음 step에서
+      - name: Crawl HTML sources
         run: npm run crawl
+
+      # Gemini 듀얼 파싱 — 변경된 HTML만 (last_parsed_hash 스킵 로직)
+      - name: Parse changed HTML sources
+        run: npm run parse
+
       - name: Upload raw snapshots
         if: always()
         uses: actions/upload-artifact@v4
