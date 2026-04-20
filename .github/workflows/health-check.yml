@@ -1,0 +1,25 @@
+name: Crawler Health Check
+
+on:
+  schedule:
+    - cron: "30 19 * * *"   # 매일 KST 04:30 — crawl.yml 이후 실행되도록
+  workflow_dispatch:
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+      - run: npm ci
+      # 실패 시 non-zero exit → GitHub가 자동으로 저장소 소유자에게 이메일 알림 발송.
+      # (GitHub 개인 설정 → Notifications → "Workflows" 켜져있어야 함. 기본값 ON.)
+      - name: Check crawler health
+        run: npx tsx scripts/alerts/check-crawlers.ts
