@@ -13,7 +13,9 @@
     "crawl:us": "tsx scripts/crawlers/run.ts US",
     "parse": "tsx scripts/parsers/run.ts",
     "parse:us": "tsx scripts/parsers/run.ts US",
-    "health": "tsx scripts/alerts/check-crawlers.ts"
+    "health": "tsx scripts/alerts/check-crawlers.ts",
+    "enrich": "tsx scripts/enrich-names.ts",
+    "mfds:ingest": "tsx scripts/mfds/ingest.ts"
   },
   "dependencies": {
     "@google/genai": "^1.50.1",

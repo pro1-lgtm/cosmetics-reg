@@ -43,22 +43,50 @@ export async function lookupRegulation(
   const supabase = supabaseAdmin();
   const q = query.trim();
 
-  // Find ingredient: INCI ilike, korean, cas, or synonyms match
-  const { data: ings } = await supabase
+  // Priority 1: exact INCI match (case-insensitive)
+  const { data: exact } = await supabase
     .from("ingredients")
     .select("id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms")
-    .or(
-      [
-        `inci_name.ilike.%${q}%`,
-        `korean_name.ilike.%${q}%`,
-        `chinese_name.ilike.%${q}%`,
-        `japanese_name.ilike.%${q}%`,
-        `cas_no.eq.${q}`,
-      ].join(","),
-    )
-    .limit(5);
+    .ilike("inci_name", q)
+    .limit(1);
 
-  const ingredient = ings?.[0] as IngredientMatch | undefined;
+  // Priority 2: exact korean_name match
+  const { data: korExact } = exact?.length
+    ? { data: null }
+    : await supabase
+        .from("ingredients")
+        .select("id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms")
+        .ilike("korean_name", q)
+        .limit(1);
+
+  // Priority 3: CAS substring match (DB may store "A\nB" for multi-CAS)
+  const looksLikeCas = /^\d{1,7}-\d{2}-\d$/.test(q);
+  const { data: casMatch } = exact?.length || korExact?.length || !looksLikeCas
+    ? { data: null }
+    : await supabase
+        .from("ingredients")
+        .select("id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms")
+        .ilike("cas_no", `%${q}%`)
+        .limit(1);
+
+  // Priority 4: fuzzy (ilike anywhere)
+  const { data: fuzzy } = exact?.length || korExact?.length || casMatch?.length
+    ? { data: null }
+    : await supabase
+        .from("ingredients")
+        .select("id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms")
+        .or(
+          [
+            `inci_name.ilike.%${q}%`,
+            `korean_name.ilike.%${q}%`,
+            `chinese_name.ilike.%${q}%`,
+            `japanese_name.ilike.%${q}%`,
+          ].join(","),
+        )
+        .limit(1);
+
+  const ingredient =
+    (exact?.[0] ?? korExact?.[0] ?? casMatch?.[0] ?? fuzzy?.[0]) as IngredientMatch | undefined;
   if (!ingredient) return { query: q, ingredient: null, results: [] };
 
   const { data: countryRows } = await supabase

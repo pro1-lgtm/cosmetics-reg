@@ -2,22 +2,19 @@ import { loadEnv } from "./crawlers/env";
 loadEnv();
 
 import { lookupRegulation } from "../lib/regulations-query";
-import { liveRegulationLookup } from "../lib/live-fallback";
 
 async function main() {
-  console.log("━━━ 1. DB lookup: Hexachlorophene (verified 예상) ━━━");
-  const r1 = await lookupRegulation("Hexachlorophene", ["US", "KR", "EU"]);
-  console.log(JSON.stringify(r1, null, 2));
+  console.log("━━━ 1. DB lookup: 레티놀 (Korean) ━━━");
+  const r1 = await lookupRegulation("레티놀", ["KR", "CN", "EU", "US", "JP", "VN"]);
+  console.log(JSON.stringify(r1, null, 2).slice(0, 2000));
 
-  console.log("\n━━━ 2. DB lookup: Mercury (quarantine 예상) ━━━");
-  const r2 = await lookupRegulation("Mercury", ["US"]);
-  console.log(JSON.stringify(r2, null, 2));
+  console.log("\n━━━ 2. DB lookup: Retinol (English) ━━━");
+  const r2 = await lookupRegulation("Retinol", ["KR", "EU"]);
+  console.log(JSON.stringify(r2, null, 2).slice(0, 1500));
 
-  console.log("\n━━━ 3. Live fallback: Retinol × 중국 수출 가능 여부 ━━━");
-  const live = await liveRegulationLookup("Retinol", "CN");
-  console.log("found:", live.found);
-  console.log("answer:", live.answer_text.slice(0, 300));
-  console.log("sources:", live.sources.slice(0, 3));
+  console.log("\n━━━ 3. DB lookup: 68-26-8 (CAS) ━━━");
+  const r3 = await lookupRegulation("68-26-8");
+  console.log("ingredient:", r3.ingredient?.inci_name, "| matches:", r3.results.filter((x) => x.source === "verified").length);
 }
 main().catch((e) => {
   console.error(e);

@@ -13,6 +13,7 @@ const EXTRACT_PROMPT = (country: string, title: string, url: string) => `
 **엄격한 규칙**:
 1. 문서 원문에 명시된 내용만 추출. 추측·보간 금지. 불명확하면 해당 항목 스킵.
 2. inci_name은 국제 INCI 표준명(영문). 문서가 로컬 언어로만 쓰였다면 korean_name / chinese_name / japanese_name 중 해당 언어 필드에 채우고 INCI명도 표준명으로 변환.
+2-a. **원문 언어와 무관하게**, 확신할 수 있는 표준 한글명(식약처 공정서)·중국어명(IECIC/GB)·일본어명(MHLW)이 있으면 각 필드에 채우세요. 확신 없으면 null. 추측 금지.
 3. status 값 의미:
    - banned: 배합금지 / 사용금지
    - restricted: 배합한도·조건부 허용

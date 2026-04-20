@@ -2,16 +2,12 @@
 
 import { useState } from "react";
 import type { LookupResponse, CountryLookupResult } from "@/lib/regulations-query";
-import type { LiveAnswer } from "@/lib/live-fallback";
-
-type LiveCache = Record<string, LiveAnswer | "loading" | { error: string }>;
 
 export default function Home() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<LookupResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [live, setLive] = useState<LiveCache>({});
 
   async function handleSearch(e: React.FormEvent) {
     e.preventDefault();
@@ -19,7 +15,6 @@ export default function Home() {
     setLoading(true);
     setError(null);
     setResponse(null);
-    setLive({});
     try {
       const res = await fetch("/api/search", {
         method: "POST",
@@ -36,26 +31,6 @@ export default function Home() {
     }
   }
 
-  async function triggerLive(ingredient: string, country: string) {
-    const key = `${country}:${ingredient}`;
-    setLive((p) => ({ ...p, [key]: "loading" }));
-    try {
-      const res = await fetch("/api/live", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ingredient, country }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "실시간 검색 실패");
-      setLive((p) => ({ ...p, [key]: data as LiveAnswer }));
-    } catch (err) {
-      setLive((p) => ({
-        ...p,
-        [key]: { error: err instanceof Error ? err.message : String(err) },
-      }));
-    }
-  }
-
   return (
     <main className="mx-auto w-full max-w-4xl px-6 py-12">
       <header className="mb-8">
@@ -63,7 +38,7 @@ export default function Home() {
           화장품 원료 규제 검색
         </h1>
         <p className="mt-1 text-sm text-zinc-500">
-          한국·중국·EU·미국·일본·ASEAN 8개국 공식 기관 데이터 기반
+          식약처 공공데이터 API (4종) · 총 원료 26K·규제 45K건 (한국·중국·EU·미국·일본·ASEAN·대만·브라질·아르헨티나·캐나다)
         </p>
       </header>
 
@@ -72,7 +47,7 @@ export default function Home() {
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="원료명 (INCI / 한글 / 중국어 / 일본어 / CAS 번호)"
+          placeholder="원료명 (INCI / 한글 / CAS 번호 — 예: Retinol, 레티놀, 68-26-8)"
           className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
           autoFocus
         />
@@ -102,21 +77,15 @@ export default function Home() {
           <IngredientHeader ingredient={response.ingredient} />
           <section className="mt-6 grid gap-3 sm:grid-cols-2">
             {response.results.map((r) => (
-              <CountryCard
-                key={r.country_code}
-                result={r}
-                ingredientName={response.ingredient!.inci_name}
-                live={live[`${r.country_code}:${response.ingredient!.inci_name}`]}
-                onLive={() => triggerLive(response.ingredient!.inci_name, r.country_code)}
-              />
+              <CountryCard key={r.country_code} result={r} />
             ))}
           </section>
         </>
       )}
 
       <footer className="mt-12 border-t border-zinc-200 pt-6 text-xs leading-relaxed text-zinc-500 dark:border-zinc-800">
-        본 서비스 정보는 AI가 공식 기관 자료를 자동 수집·정리한 참고 자료입니다. 최종 규제
-        판단은 반드시 해당 국가 공식 문서 원문을 확인해 주세요.
+        본 서비스 정보는 식약처 공공데이터 포털의 공식 API를 자동 수집·정리한 참고 자료입니다.
+        최종 규제 판단은 반드시 해당 국가 공식 문서 원문을 확인해 주세요.
       </footer>
     </main>
   );
@@ -139,7 +108,7 @@ function IngredientHeader({ ingredient }: { ingredient: NonNullable<LookupRespon
         {ingredient.cas_no && (
           <>
             <dt className="text-zinc-400">CAS</dt>
-            <dd>{ingredient.cas_no}</dd>
+            <dd className="whitespace-pre-wrap">{ingredient.cas_no}</dd>
           </>
         )}
         {ingredient.chinese_name && (
@@ -157,7 +126,7 @@ function IngredientHeader({ ingredient }: { ingredient: NonNullable<LookupRespon
       </dl>
       {ingredient.synonyms.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
-          {ingredient.synonyms.map((s) => (
+          {ingredient.synonyms.slice(0, 8).map((s) => (
             <span
               key={s}
               className="rounded bg-zinc-100 px-1.5 py-0.5 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
@@ -183,6 +152,10 @@ const COUNTRY_FLAG: Record<string, string> = {
   MY: "🇲🇾",
   PH: "🇵🇭",
   SG: "🇸🇬",
+  TW: "🇹🇼",
+  BR: "🇧🇷",
+  AR: "🇦🇷",
+  CA: "🇨🇦",
 };
 
 const STATUS_STYLE: Record<string, { label: string; className: string }> = {
@@ -203,18 +176,13 @@ const STATUS_STYLE: Record<string, { label: string; className: string }> = {
     label: "미수록 (수출 불가)",
     className: "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
   },
+  unknown: {
+    label: "분류 확인 필요",
+    className: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+  },
 };
 
-function CountryCard({
-  result,
-  live,
-  onLive,
-}: {
-  result: CountryLookupResult;
-  ingredientName: string;
-  live: LiveAnswer | "loading" | { error: string } | undefined;
-  onLive: () => void;
-}) {
+function CountryCard({ result }: { result: CountryLookupResult }) {
   return (
     <article className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
       <header className="mb-3 flex items-center justify-between">
@@ -228,9 +196,7 @@ function CountryCard({
           )}
         </div>
         {result.source === "verified" && result.last_verified_at && (
-          <span className="text-xs text-zinc-400">
-            🤖 {daysAgo(result.last_verified_at)}
-          </span>
+          <span className="text-xs text-zinc-400">🤖 {daysAgo(result.last_verified_at)}</span>
         )}
       </header>
 
@@ -253,93 +219,40 @@ function CountryCard({
             </div>
           )}
           {result.product_categories && result.product_categories.length > 0 && (
-            <div className="text-xs text-zinc-500">
-              적용 제품: {result.product_categories.join(", ")}
-            </div>
+            <div className="text-xs text-zinc-500">적용 제품: {result.product_categories.join(", ")}</div>
           )}
           {result.conditions && (
-            <div className="text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
-              {result.conditions}
-            </div>
+            <details className="text-xs text-zinc-600 dark:text-zinc-400">
+              <summary className="cursor-pointer text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">
+                조건·비고 보기
+              </summary>
+              <pre className="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed">{result.conditions}</pre>
+            </details>
           )}
-          {result.source_url && (
-            <a
-              href={result.source_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-block text-xs text-blue-600 hover:underline dark:text-blue-400"
-            >
-              원문 출처 →
-            </a>
+          {result.source_document && (
+            <div className="text-[11px] text-zinc-400">출처: {result.source_document}</div>
           )}
         </div>
       )}
 
       {result.source === "pending" && (
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           <span className="inline-block rounded-md bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-800 dark:bg-orange-950/60 dark:text-orange-200">
             검토 중
           </span>
           <p className="text-xs text-zinc-500">{humanizeReason(result.pending_reason)}</p>
-          <button
-            onClick={onLive}
-            className="text-xs text-blue-600 hover:underline dark:text-blue-400"
-          >
-            AI 실시간 검색 시도 →
-          </button>
-          <LiveResultBlock live={live} />
         </div>
       )}
 
       {result.source === "not_found" && (
-        <div className="space-y-2">
-          <p className="text-xs text-zinc-500">DB에 수록되지 않음</p>
-          <button
-            onClick={onLive}
-            className="inline-block rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700"
-          >
-            AI 실시간 검색
-          </button>
-          <LiveResultBlock live={live} />
+        <div className="space-y-1">
+          <span className="inline-block rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200">
+            금지·제한 목록 미수록
+          </span>
+          <p className="text-[11px] text-zinc-500">사용제한·금지 데이터에 없음 — 일반 사용 가능 가능성이 높으나, 최종 확인은 공식 원문 권장</p>
         </div>
       )}
     </article>
-  );
-}
-
-function LiveResultBlock({ live }: { live: LiveAnswer | "loading" | { error: string } | undefined }) {
-  if (!live) return null;
-  if (live === "loading") {
-    return <div className="mt-2 text-xs text-zinc-500">공식 출처 검색 중...</div>;
-  }
-  if ("error" in live) {
-    return (
-      <div className="mt-2 rounded bg-red-50 px-2 py-1 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300">
-        {live.error}
-      </div>
-    );
-  }
-  return (
-    <div className="mt-2 rounded border border-blue-100 bg-blue-50 p-2 text-xs leading-relaxed dark:border-blue-900 dark:bg-blue-950/30">
-      <p className="text-zinc-700 dark:text-zinc-300">{live.answer_text}</p>
-      {live.sources.length > 0 && (
-        <ul className="mt-2 space-y-0.5">
-          {live.sources.slice(0, 5).map((s, i) => (
-            <li key={i}>
-              <a
-                href={s.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue-600 hover:underline dark:text-blue-400"
-              >
-                {s.title ?? s.url}
-              </a>
-            </li>
-          ))}
-        </ul>
-      )}
-      <p className="mt-1.5 text-[10px] text-zinc-400">{live.disclaimer}</p>
-    </div>
   );
 }
 
@@ -353,11 +266,8 @@ function daysAgo(iso: string) {
 
 function humanizeReason(reason?: string): string {
   if (!reason) return "자동 검증 중";
-  if (reason.startsWith("model_disagreement:"))
-    return "AI 모델 간 해석이 달라 검증 대기 중";
-  if (reason.startsWith("one_model_only_"))
-    return "한 AI 모델만 감지 — 검증 대기 중";
-  if (reason.startsWith("outlier_concentration"))
-    return "기존 값 대비 이상 감지 — 검증 대기 중";
+  if (reason.startsWith("model_disagreement:")) return "AI 모델 간 해석이 달라 검증 대기 중";
+  if (reason.startsWith("one_model_only_")) return "한 AI 모델만 감지 — 검증 대기 중";
+  if (reason.startsWith("outlier_concentration")) return "기존 값 대비 이상 감지 — 검증 대기 중";
   return "검증 대기";
 }
