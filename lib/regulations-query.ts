@@ -1,5 +1,15 @@
 import { supabaseAdmin } from "./supabase";
 
+// Escape PostgREST ILIKE special chars AND filter-string separators. Commas, parens,
+// backslashes, and wildcards (%, _) can let user input corrupt an `or()` filter string
+// or inject additional filters. Removing them is safer than half-escaping.
+function sanitizeIlikeValue(s: string): string {
+  return s.replace(/[,()%_\\"]/g, " ").trim();
+}
+
+const INGREDIENT_COLS =
+  "id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms, description";
+
 export type LookupSource = "verified" | "pending" | "not_found";
 
 export interface CountryLookupResult {
@@ -43,12 +53,14 @@ export async function lookupRegulation(
 ): Promise<LookupResponse> {
   const supabase = supabaseAdmin();
   const q = query.trim();
+  const safe = sanitizeIlikeValue(q);
+  if (!safe) return { query: q, ingredient: null, results: [] };
 
-  // Priority 1: exact INCI match (case-insensitive)
+  // Priority 1: exact INCI match
   const { data: exact } = await supabase
     .from("ingredients")
-    .select("id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms, description")
-    .ilike("inci_name", q)
+    .select(INGREDIENT_COLS)
+    .ilike("inci_name", safe)
     .limit(1);
 
   // Priority 2: exact korean_name match
@@ -56,38 +68,36 @@ export async function lookupRegulation(
     ? { data: null }
     : await supabase
         .from("ingredients")
-        .select("id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms, description")
-        .ilike("korean_name", q)
+        .select(INGREDIENT_COLS)
+        .ilike("korean_name", safe)
         .limit(1);
 
-  // Priority 3: CAS substring match (DB may store "A\nB" for multi-CAS)
+  // Priority 3: CAS substring match (multi-CAS stored as "A\nB")
   const looksLikeCas = /^\d{1,7}-\d{2}-\d$/.test(q);
-  const { data: casMatch } = exact?.length || korExact?.length || !looksLikeCas
-    ? { data: null }
-    : await supabase
-        .from("ingredients")
-        .select("id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms, description")
-        .ilike("cas_no", `%${q}%`)
-        .limit(1);
+  const { data: casMatch } =
+    exact?.length || korExact?.length || !looksLikeCas
+      ? { data: null }
+      : await supabase
+          .from("ingredients")
+          .select(INGREDIENT_COLS)
+          .ilike("cas_no", `%${safe}%`)
+          .limit(1);
 
-  // Priority 4: fuzzy (ilike anywhere)
-  const { data: fuzzy } = exact?.length || korExact?.length || casMatch?.length
-    ? { data: null }
-    : await supabase
-        .from("ingredients")
-        .select("id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms, description")
-        .or(
-          [
-            `inci_name.ilike.%${q}%`,
-            `korean_name.ilike.%${q}%`,
-            `chinese_name.ilike.%${q}%`,
-            `japanese_name.ilike.%${q}%`,
-          ].join(","),
-        )
-        .limit(1);
+  // Priority 4: fuzzy substring across all name fields (parallel, no or() string)
+  let fuzzyMatch: IngredientMatch | undefined;
+  if (!exact?.length && !korExact?.length && !casMatch?.length) {
+    const pattern = `%${safe}%`;
+    const fields = ["inci_name", "korean_name", "chinese_name", "japanese_name"] as const;
+    const parallel = await Promise.all(
+      fields.map((f) =>
+        supabase.from("ingredients").select(INGREDIENT_COLS).ilike(f, pattern).limit(1),
+      ),
+    );
+    fuzzyMatch = parallel.map((r) => r.data?.[0]).find(Boolean) as IngredientMatch | undefined;
+  }
 
   const ingredient =
-    (exact?.[0] ?? korExact?.[0] ?? casMatch?.[0] ?? fuzzy?.[0]) as IngredientMatch | undefined;
+    (exact?.[0] ?? korExact?.[0] ?? casMatch?.[0] ?? fuzzyMatch) as IngredientMatch | undefined;
   if (!ingredient) return { query: q, ingredient: null, results: [] };
 
   const { data: countryRows } = await supabase
