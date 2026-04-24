@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { LookupResponse, CountryLookupResult } from "@/lib/regulations-query";
 
 interface Suggestion {
@@ -10,7 +11,18 @@ interface Suggestion {
 }
 
 export default function Home() {
-  const [query, setQuery] = useState("");
+  return (
+    <Suspense fallback={null}>
+      <HomeInner />
+    </Suspense>
+  );
+}
+
+function HomeInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialQ = searchParams.get("q") ?? "";
+  const [query, setQuery] = useState(initialQ);
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<LookupResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -20,6 +32,7 @@ export default function Home() {
   const [activeIdx, setActiveIdx] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLFormElement>(null);
+  const listboxId = "autocomplete-listbox";
 
   // Autocomplete — debounced fetch. Empty query는 아래 렌더 조건에서 처리 (effect 내 setState 회피).
   useEffect(() => {
@@ -60,6 +73,8 @@ export default function Home() {
     setError(null);
     setResponse(null);
     setShowSuggestions(false);
+    // URL 딥링크: ?q=... 로 직접 공유·뒤로가기 가능. replace로 history 폭증 방지.
+    router.replace(`/?q=${encodeURIComponent(trimmed)}`, { scroll: false });
     try {
       const res = await fetch("/api/search", {
         method: "POST",
@@ -75,6 +90,15 @@ export default function Home() {
       setLoading(false);
     }
   }
+
+  // 초기 ?q= 파라미터 있으면 자동 검색 (새로고침·공유 링크 진입 지원).
+  // setState는 runSearch 내부 async 콜백에서 일어나지만 정적 분석이 이를 직접 호출로 판정
+  // → mount-once effect 전체에 disable 주석.
+  /* eslint-disable react-hooks/exhaustive-deps, react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (initialQ.trim().length >= 2) void runSearch(initialQ);
+  }, []);
+  /* eslint-enable react-hooks/exhaustive-deps, react-hooks/set-state-in-effect */
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -128,15 +152,29 @@ export default function Home() {
             onFocus={() => setShowSuggestions(true)}
             onKeyDown={onKeyDown}
             placeholder="원료명 (INCI / 한글 / CAS 번호 — 예: Retinol, 레티놀, 68-26-8)"
-            className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+            className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-500/30 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
             autoFocus
             autoComplete="off"
+            role="combobox"
+            aria-label="화장품 원료 검색"
+            aria-expanded={showSuggestions && suggestions.length > 0}
+            aria-controls={listboxId}
+            aria-autocomplete="list"
+            aria-activedescendant={activeIdx >= 0 ? `ac-option-${activeIdx}` : undefined}
           />
           {query.trim().length > 0 && showSuggestions && suggestions.length > 0 && (
-            <ul className="absolute left-0 right-0 top-full z-10 mt-1 max-h-80 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+            <ul
+              id={listboxId}
+              role="listbox"
+              aria-label="검색 제안"
+              className="absolute left-0 right-0 top-full z-10 mt-1 max-h-80 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
+            >
               {suggestions.map((s, i) => (
                 <li
                   key={`${s.inci_name}-${i}`}
+                  id={`ac-option-${i}`}
+                  role="option"
+                  aria-selected={i === activeIdx}
                   onMouseDown={(e) => {
                     e.preventDefault();
                     pickSuggestion(s);

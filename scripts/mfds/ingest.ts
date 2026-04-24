@@ -12,6 +12,8 @@ import type {
 
 const SOURCE_DOC = "MFDS 공공데이터 API";
 const SOURCE_URL_BASE = "https://www.data.go.kr/data";
+const MFDS_DOC_KEY = "kr_mfds_public_data_api";
+const MFDS_SOURCE_NAME = "MFDS 공공데이터 API updatedAt"; // registry.ts와 일치
 
 interface CanonicalIngredient {
   inci_name: string;
@@ -160,6 +162,8 @@ interface RegulationRow {
   conditions: string | null;
   source_url: string;
   source_document: string;
+  source_document_id: string | null; // migration 0005 FK
+  source_version: string | null;
   last_verified_at: string;
   auto_verified: boolean;
   confidence_score: number;
@@ -182,6 +186,8 @@ function mapRegulateType(t: string, limitCond?: string | null, provis?: string |
 function buildRegulationsFromRestriction(
   rows: UseRestrictionItem[],
   idMap: Map<string, string>,
+  sourceDocId: string | null,
+  sourceVersion: string | null,
 ): RegulationRow[] {
   const merged = new Map<string, RegulationRow>();
   const now = new Date().toISOString();
@@ -230,6 +236,8 @@ function buildRegulationsFromRestriction(
           conditions,
           source_url: SOURCE_URL_BASE,
           source_document: SOURCE_DOC,
+          source_document_id: sourceDocId,
+          source_version: sourceVersion,
           last_verified_at: now,
           auto_verified: true,
           confidence_score: 0.95, // MFDS 공식 API → 모델 파싱보다 신뢰도 높게
@@ -319,6 +327,63 @@ async function replaceMfdsRegulations(
   }
 }
 
+/**
+ * MFDS API 수집 세션을 대표하는 source_documents 행 upsert.
+ * 매 실행마다 last_checked_at·last_changed_at 갱신 + regulation_source_id(KR primary) FK.
+ * buildRegulationsFromRestriction이 이 ID를 각 regulations 행의 source_document_id에 채움.
+ */
+async function upsertMfdsSourceDocument(
+  supabase: ReturnType<typeof supabaseAdmin>,
+  version: string,
+): Promise<string> {
+  const rs = await supabase
+    .from("regulation_sources")
+    .select("id")
+    .eq("country_code", "KR")
+    .eq("name", MFDS_SOURCE_NAME)
+    .maybeSingle();
+  const regSourceId = (rs.data?.id as string | null) ?? null;
+
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("source_documents")
+    .upsert(
+      {
+        country_code: "KR",
+        doc_key: MFDS_DOC_KEY,
+        title: SOURCE_DOC,
+        source_url: SOURCE_URL_BASE,
+        last_checked_at: now,
+        last_changed_at: now,
+        check_status: "ok",
+        regulation_source_id: regSourceId,
+        detect_method: "api",
+        notes: null,
+      },
+      { onConflict: "country_code,doc_key" },
+    )
+    .select("id")
+    .single();
+  if (error) throw new Error(`source_documents upsert failed: ${error.message}`);
+
+  // regulation_sources 통계 갱신 (KR primary API 경로 — 매일 작동함을 증명)
+  if (regSourceId) {
+    await supabase
+      .from("regulation_sources")
+      .update({
+        last_checked_at: now,
+        last_changed_at: now,
+        check_status: "ok",
+        last_error: null,
+        consecutive_failures: 0,
+      })
+      .eq("id", regSourceId);
+  }
+
+  console.log(`  source_documents id: ${data.id}, version: ${version}`);
+  return data.id as string;
+}
+
 async function ensureAdditionalCountries(supabase: ReturnType<typeof supabaseAdmin>) {
   const rows = [
     { code: "TW", name_ko: "대만", name_en: "Taiwan", regulation_framework: "TW_TFDA", notes: "대만 식품약물관리서(TFDA)" },
@@ -383,8 +448,13 @@ async function main() {
   const idMap = await upsertIngredients(supabase, ingredientList);
   console.log(`  id map size: ${idMap.size}`);
 
+  // source_documents row를 먼저 upsert — 이후 regulations가 source_document_id FK로 연결
+  const runDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const sourceVersion = `MFDS-${runDate}`;
+  const sourceDocId = await upsertMfdsSourceDocument(supabase, sourceVersion);
+
   console.log("▶ [5/5] Building regulations + upserting...");
-  const regulations = buildRegulationsFromRestriction(restrictions, idMap);
+  const regulations = buildRegulationsFromRestriction(restrictions, idMap, sourceDocId, sourceVersion);
   console.log(`  regulations built: ${regulations.length}`);
 
   if (details.length > 0) {

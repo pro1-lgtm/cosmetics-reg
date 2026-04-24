@@ -12,9 +12,28 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const SITE_URL = "https://cosmetics-reg-tim10000.netlify.app";
+const TITLE = "화장품 원료 규제 검색";
+const DESC = "15개국 화장품 원료의 배합금지·한도·positive list 수록 여부를 식약처 공공데이터 API 등 공식 기관 원본에서 직접 조회.";
+
 export const metadata: Metadata = {
-  title: "화장품 원료 규제 검색",
-  description: "국가별 화장품 원료 규제·배합한도·수출 가능 여부를 공식 기관 데이터로 조회합니다.",
+  metadataBase: new URL(SITE_URL),
+  title: TITLE,
+  description: DESC,
+  openGraph: {
+    title: TITLE,
+    description: DESC,
+    url: SITE_URL,
+    siteName: TITLE,
+    locale: "ko_KR",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: TITLE,
+    description: DESC,
+  },
+  robots: { index: true, follow: true },
 };
 
 export default function RootLayout({
