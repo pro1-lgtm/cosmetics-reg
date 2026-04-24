@@ -45,3 +45,6 @@ next-env.d.ts
 
 # Local Netlify folder
 .netlify
+
+# e2e
+.e2e-shots/
