@@ -52,26 +52,55 @@ function prompt(inci: string, korean: string | null) {
 - function_description은 한국어로만.`;
 }
 
+function parseRetryDelayMs(errMsg: string): number | null {
+  // Gemini format 1: "Please retry in 21.544384736s."
+  const m1 = errMsg.match(/retry in (\d+(?:\.\d+)?)s/i);
+  if (m1) return Math.ceil(Number(m1[1]) * 1000);
+  // Gemini format 2: "retryDelay":"22s"
+  const m2 = errMsg.match(/"retryDelay":"(\d+(?:\.\d+)?)s"/);
+  if (m2) return Math.ceil(Number(m2[1]) * 1000);
+  return null;
+}
+
 async function enrichOne(
   ai: GoogleGenAI,
   inci: string,
   korean: string | null,
 ): Promise<{ function_category: string | null; function_description: string | null }> {
-  const res = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: prompt(inci, korean),
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: SCHEMA as unknown as Record<string, unknown>,
-      temperature: 0,
-    },
-  });
-  const text = res.text ?? "{}";
-  const parsed = JSON.parse(text);
-  return {
-    function_category: parsed.function_category ?? null,
-    function_description: parsed.function_description ?? null,
-  };
+  const maxAttempts = 4;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt(inci, korean),
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: SCHEMA as unknown as Record<string, unknown>,
+          temperature: 0,
+        },
+      });
+      const text = res.text ?? "{}";
+      const parsed = JSON.parse(text);
+      return {
+        function_category: parsed.function_category ?? null,
+        function_description: parsed.function_description ?? null,
+      };
+    } catch (e) {
+      lastErr = e;
+      const msg = e instanceof Error ? e.message : String(e);
+      const retryable = /503|UNAVAILABLE|RESOURCE_EXHAUSTED|429|ECONNRESET|ETIMEDOUT/i.test(msg);
+      if (!retryable || attempt === maxAttempts) throw e;
+      // Honor server's retry_delay on 429; fallback to exponential backoff on 503
+      const serverDelay = parseRetryDelayMs(msg);
+      const waitMs = serverDelay ?? 2_000 * 2 ** (attempt - 1);
+      console.warn(
+        `  retry ${attempt}/${maxAttempts - 1} after ${Math.round(waitMs / 1000)}s${serverDelay ? " (server)" : ""} — ${msg.slice(0, 60)}`,
+      );
+      await new Promise((r) => setTimeout(r, waitMs + 500)); // small buffer
+    }
+  }
+  throw lastErr;
 }
 
 async function main() {
@@ -119,9 +148,12 @@ async function main() {
     `대상 원료 ${targets.length}건 (전체 규제 연결 ${ordered.length}건 중, limit=${limit}, force=${force})`,
   );
 
-  const MIN_INTERVAL_MS = 12_000; // 5 RPM → 12s/req
+  // Gemini Flash 무료 tier: 20 RPM (에러 메시지상 실측). 3s = 20 RPM 한계치.
+  // 재시도 여유 + 안전 버퍼 고려해 6s.
+  const MIN_INTERVAL_MS = 6_000;
   let okCount = 0;
   let errCount = 0;
+  let consecutive429 = 0;
 
   for (let idx = 0; idx < targets.length; idx++) {
     const ing = targets[idx];
@@ -139,6 +171,7 @@ async function main() {
           })
           .eq("id", ing.id);
         okCount++;
+        consecutive429 = 0;
         console.log(
           `[${idx + 1}/${targets.length}] ✓ ${inci} → ${enriched.function_category ?? "-"} | ${enriched.function_description ?? "-"}`,
         );
@@ -147,9 +180,19 @@ async function main() {
       }
     } catch (e) {
       errCount++;
-      console.error(
-        `[${idx + 1}/${targets.length}] ✗ ${inci}: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[${idx + 1}/${targets.length}] ✗ ${inci}: ${msg.slice(0, 150)}`);
+      if (/429|RESOURCE_EXHAUSTED/i.test(msg)) {
+        consecutive429++;
+        if (consecutive429 >= 5) {
+          console.error(
+            `연속 429 ${consecutive429}회 — 일일 quota 소진 가능성. 중단. 내일 다시 실행.`,
+          );
+          break;
+        }
+      } else {
+        consecutive429 = 0;
+      }
     }
 
     const elapsed = Date.now() - startedAt;
