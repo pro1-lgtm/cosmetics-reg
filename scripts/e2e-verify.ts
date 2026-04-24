@@ -187,6 +187,35 @@ async function main() {
     `HTTP ${srcStatus} + 테이블 렌더`);
   await page.screenshot({ path: `${SHOT_DIR}/t21-sources.png`, fullPage: true });
 
+  // T22 rate limit 헤더 노출 — /api/* middleware
+  const rlRes = await page.request.post(`${BASE}/api/search`, { data: { query: "Retinol" } });
+  const rlHdrs = rlRes.headers();
+  const hasLimit = !!rlHdrs["x-ratelimit-limit"];
+  const hasRemaining = !!rlHdrs["x-ratelimit-remaining"];
+  record("T22 rate limit 헤더 노출",
+    hasLimit && hasRemaining,
+    `limit=${rlHdrs["x-ratelimit-limit"]} remaining=${rlHdrs["x-ratelimit-remaining"]}`);
+
+  // T23 보안 헤더 (production) — 정적 페이지 응답
+  const secRes = await page.request.get(BASE);
+  const secH = secRes.headers();
+  const secOk = !!secH["x-content-type-options"] && !!secH["x-frame-options"] && !!secH["strict-transport-security"];
+  record("T23 보안 헤더 5종", secOk,
+    `XCTO=${!!secH["x-content-type-options"]} XFO=${!!secH["x-frame-options"]} HSTS=${!!secH["strict-transport-security"]}`);
+
+  // T24 CSP-Report-Only 노출
+  const csp = secH["content-security-policy-report-only"];
+  record("T24 CSP-Report-Only",
+    !!csp && csp.includes("supabase.co") && csp.includes("generativelanguage"),
+    csp ? "supabase+gemini allowlist OK" : "MISSING");
+
+  // T25 robots.txt + sitemap
+  const rob = await page.request.get(`${BASE}/robots.txt`);
+  const sit = await page.request.get(`${BASE}/sitemap.xml`);
+  record("T25 robots + sitemap",
+    rob.status() === 200 && sit.status() === 200,
+    `robots HTTP ${rob.status()} sitemap HTTP ${sit.status()}`);
+
   await page.screenshot({ path: `${SHOT_DIR}/desktop-final.png`, fullPage: true });
   await ctx.close();
 

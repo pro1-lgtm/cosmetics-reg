@@ -40,16 +40,19 @@ export const REGULATION_SOURCES: RegulationSourceSeed[] = [
     tier: "primary",
     priority: 100,
   },
+  // KR secondary는 보류 — MFDS 공공데이터 API(primary)가 이미 고시 개정 데이터 포함하고,
+  // m_207/list.do가 브라우저 외 UA에 connection reset 반환. Phase 4에서 Playwright 기반 fetcher
+  // 도입 후 재활성화. seed.ts에서 active=false로 주입.
   {
     country_code: "KR",
     name: "MFDS 화장품 법령·고시 공고",
-    description: "식약처 법령정보 — 화장품 관련 고시 개정 공고",
+    description: "[비활성] 봇 차단 — MFDS API가 primary. Phase 4에서 Playwright fetcher로 재도입.",
     url: "https://www.mfds.go.kr/brd/m_207/list.do",
     detect_method: "hash",
     content_selector: "table.board_list",
-    check_cadence_hours: 24,
+    check_cadence_hours: 168,
     tier: "secondary",
-    priority: 90,
+    priority: 0,
   },
 
   // ======================= CN =======================
@@ -77,16 +80,18 @@ export const REGULATION_SOURCES: RegulationSourceSeed[] = [
   },
 
   // ======================= EU =======================
+  // EU EUR-Lex 검색·문서 페이지 전부 async 렌더링 + 봇 차단(HTTP 202). 정적 fetch 불가.
+  // Phase 4에서 Playwright 기반 fetcher 필수. 임시: CosIng secondary에 우선 의존.
   {
     country_code: "EU",
     name: "EUR-Lex Cosmetic Regulation amendments",
-    description: "EUR-Lex — Regulation (EC) 1223/2009 및 Annex 개정 Commission Regulation 추적",
-    url: "https://eur-lex.europa.eu/search.html?scope=EURLEX&text=%22Regulation+%28EC%29+No+1223%2F2009%22&lang=en&type=quick",
+    description: "[Phase4 대기] EUR-Lex 동적 페이지 — Playwright fetcher 도입 후 활성화",
+    url: "https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:02009R1223-20240817",
     detect_method: "hash",
-    content_selector: "div.SearchResult",
-    check_cadence_hours: 24,
+    content_selector: "body",
+    check_cadence_hours: 168,
     tier: "primary",
-    priority: 100,
+    priority: 50,
   },
   {
     country_code: "EU",
@@ -164,13 +169,13 @@ export const REGULATION_SOURCES: RegulationSourceSeed[] = [
   {
     country_code: "TH",
     name: "Thailand FDA Cosmetic notifications",
-    description: "태국 FDA 화장품 관련 공고",
-    url: "https://www.fda.moph.go.th/sites/Cosmetic/",
+    description: "태국 FDA 메인 도메인 — Cosmetic Control Division 공지 경로는 응답 없음, 메인 hash diff로 대체",
+    url: "https://www.fda.moph.go.th/",
     detect_method: "hash",
-    content_selector: "main",
-    check_cadence_hours: 48,
+    content_selector: "body",
+    check_cadence_hours: 72,
     tier: "primary",
-    priority: 80,
+    priority: 60,
   },
   {
     country_code: "ID",
