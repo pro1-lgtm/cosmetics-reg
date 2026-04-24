@@ -59,12 +59,17 @@ export async function applyOutcomes(
     const reg = outcome.merged;
     const ingredient_id = await findOrCreateIngredient(ctx.supabase, reg);
 
-    const { data: existing } = await ctx.supabase
+    // maybeSingle은 동일 조합 2건+ 존재 시 error → insert 분기로 빠져 누적되는 버그 원인.
+    // order + limit(1) 로 최신 1건만. 여러 건은 migration 0006 partial unique + promote.ts로 정리.
+    const existingRows = await ctx.supabase
       .from("regulations")
       .select("id, max_concentration")
       .eq("ingredient_id", ingredient_id)
       .eq("country_code", ctx.country_code)
-      .maybeSingle();
+      .is("valid_to", null)
+      .order("last_verified_at", { ascending: false })
+      .limit(1);
+    const existing = existingRows.data?.[0] ?? null;
 
     if (existing) {
       const out = isOutlier(reg.max_concentration, existing.max_concentration as number | null);
