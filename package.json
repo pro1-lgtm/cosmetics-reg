@@ -19,7 +19,8 @@
     "mfds:ingest": "tsx scripts/mfds/ingest.ts",
     "sources:seed": "tsx scripts/sources/seed.ts",
     "db:sweep-duplicates": "tsx scripts/db/sweep-duplicates.ts",
-    "e2e": "tsx scripts/e2e-verify.ts"
+    "e2e": "tsx scripts/e2e-verify.ts",
+    "lighthouse": "tsx scripts/lighthouse.ts"
   },
   "dependencies": {
     "@google/genai": "^1.50.1",
@@ -34,9 +35,11 @@
     "@types/node": "^20.19.39",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "chrome-launcher": "^1.2.1",
     "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
+    "lighthouse": "^13.1.0",
     "playwright": "^1.59.1",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
