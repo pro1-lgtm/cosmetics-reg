@@ -138,10 +138,13 @@ async function main() {
   // T15 pending 상태 렌더 — regulations에 없고 quarantine에만 있는 원료 필요
   if (pendingName) {
     await search(page, pendingName);
-    const bodyQ = await page.textContent("body");
+    // "검토 중" 배지가 실제 DOM에 존재하는지 locator count로 확인 (body textContent보다 안정)
+    await page.waitForTimeout(800); // CountryCard 렌더 여유
+    const pendingBadges = await page.locator("text=검토 중").count();
+    await page.screenshot({ path: `${SHOT_DIR}/t15-pending.png`, fullPage: true });
     record(`T15 pending 렌더 (${pendingName.slice(0,30)})`,
-      bodyQ?.includes("검토 중") ?? false,
-      `"검토 중" 노출`);
+      pendingBadges > 0,
+      `"검토 중" 배지 ${pendingBadges}개`);
   } else {
     record("T15 pending 렌더", true, "skip — pending-only 원료 없음");
   }
