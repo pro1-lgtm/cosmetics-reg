@@ -12,6 +12,7 @@ function sanitize(s: string): string {
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const raw = (searchParams.get("q") ?? "").trim();
+  if (raw.length > 128) return NextResponse.json([]);
   const safe = sanitize(raw);
   if (safe.length < 1) return NextResponse.json([]);
 

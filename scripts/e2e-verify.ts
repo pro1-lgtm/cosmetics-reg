@@ -178,8 +178,7 @@ async function main() {
   const dpage = await dctx.newPage();
   await dpage.goto(BASE, { waitUntil: "networkidle", timeout: 30_000 });
   await search(dpage, "Retinol");
-  // Tailwind dark: 클래스가 적용됐는지 확인
-  const bodyClass = await dpage.evaluate(() => document.documentElement.className + " " + document.body.className);
+  // Tailwind dark: 클래스가 적용됐는지 확인 — body 배경 계산값 기준 (class 확인은 tailwind v4에선 미신뢰)
   const htmlClass = await dpage.evaluate(() => {
     const style = getComputedStyle(document.body);
     return { bg: style.backgroundColor, color: style.color };

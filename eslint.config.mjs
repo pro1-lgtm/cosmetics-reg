@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Netlify Next.js plugin 빌드 산출물 (minified) — lint 대상 아님
+    ".netlify/**",
   ]),
 ]);
 
