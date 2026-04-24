@@ -19,7 +19,7 @@ export interface IngredientMasterItem {
 
 // 사용제한 원료정보 (31K) — per-country ban/restriction rows
 export interface UseRestrictionItem {
-  REGULATE_TYPE: string; // "금지" | "제한"
+  REGULATE_TYPE: string; // 주로 "금지" | "제한" | 빈값; 이외 다국어 값 관측됨(→ LIMIT_COND로 보조 판별)
   INGR_STD_NAME: string;
   INGR_ENG_NAME: string | null;
   CAS_NO: string | null;

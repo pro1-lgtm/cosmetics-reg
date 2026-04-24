@@ -21,13 +21,10 @@ export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLFormElement>(null);
 
-  // Autocomplete — debounced fetch
+  // Autocomplete — debounced fetch. Empty query는 아래 렌더 조건에서 처리 (effect 내 setState 회피).
   useEffect(() => {
     const q = query.trim();
-    if (q.length < 1) {
-      setSuggestions([]);
-      return;
-    }
+    if (q.length < 1) return;
     const ac = new AbortController();
     const t = setTimeout(async () => {
       try {
@@ -135,7 +132,7 @@ export default function Home() {
             autoFocus
             autoComplete="off"
           />
-          {showSuggestions && suggestions.length > 0 && (
+          {query.trim().length > 0 && showSuggestions && suggestions.length > 0 && (
             <ul className="absolute left-0 right-0 top-full z-10 mt-1 max-h-80 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
               {suggestions.map((s, i) => (
                 <li

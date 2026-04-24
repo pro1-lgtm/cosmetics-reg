@@ -8,7 +8,6 @@ import type {
   IngredientMasterItem,
   UseRestrictionItem,
   CountryDetailItem,
-  AggregateRegulationItem,
 } from "./types";
 
 const SOURCE_DOC = "MFDS 공공데이터 API";
@@ -166,9 +165,17 @@ interface RegulationRow {
   confidence_score: number;
 }
 
-function mapRegulateType(t: string): RegulationRow["status"] {
-  if (t.includes("금지")) return "banned";
-  if (t.includes("제한")) return "restricted";
+// MFDS REGULATE_TYPE은 "금지" | "제한" 외의 값도 포함 (영어/다국어/빈 문자열).
+// 키워드 미매칭 시 LIMIT_COND·PROVIS_ATRCL 텍스트로 보조 판별: 배합한도·최대농도·limit 등이
+// 있으면 사실상 restricted. 이 로직 없으면 9K+ 행이 부당하게 "unknown"으로 분류됨.
+function mapRegulateType(t: string, limitCond?: string | null, provis?: string | null): RegulationRow["status"] {
+  const bannedRe = /금지|배합금지|ban|prohibit/i;
+  const restrictedRe = /제한|배합한도|limit|restric|maximum|최대/i;
+  if (bannedRe.test(t)) return "banned";
+  if (restrictedRe.test(t)) return "restricted";
+  const aux = `${limitCond ?? ""}\n${provis ?? ""}`;
+  if (bannedRe.test(aux)) return "banned";
+  if (restrictedRe.test(aux)) return "restricted";
   return "unknown";
 }
 
@@ -193,7 +200,7 @@ function buildRegulationsFromRestriction(
     }
     const codes = mapCountryName(r.COUNTRY_NAME);
     if (codes.length === 0) continue;
-    const status = mapRegulateType(r.REGULATE_TYPE);
+    const status = mapRegulateType(r.REGULATE_TYPE, r.LIMIT_COND, r.PROVIS_ATRCL);
     const conditionsParts = [r.LIMIT_COND, r.PROVIS_ATRCL].filter(Boolean);
     const conditions = conditionsParts.length > 0 ? conditionsParts.join("\n\n") : null;
 
