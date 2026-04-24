@@ -4,7 +4,8 @@ import { loadEnv } from "./crawlers/env";
 loadEnv();
 import { supabaseAdmin } from "../lib/supabase";
 
-const BASE = "https://cosmetics-reg-tim10000.netlify.app";
+// BASE는 E2E_BASE 환경변수 또는 기본 prod URL. localhost 검증 시 E2E_BASE=http://localhost:3000.
+const BASE = process.env.E2E_BASE ?? "https://cosmetics-reg-tim10000.netlify.app";
 const SHOT_DIR = ".e2e-shots";
 
 type Result = { name: string; ok: boolean; detail: string };

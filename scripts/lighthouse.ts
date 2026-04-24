@@ -16,10 +16,22 @@ interface LhReport {
 
 async function main() {
   console.log(`Lighthouse: ${URL}`);
-  const json = execSync(
-    `npx lighthouse "${URL}" --quiet --output=json --chrome-flags="--headless=new --no-sandbox" --only-categories=performance,accessibility,best-practices,seo`,
-    { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], maxBuffer: 50 * 1024 * 1024 },
-  );
+  // Lighthouse CLI는 Windows에서 temp 정리 중 EPERM으로 non-zero exit 가능. stdout의 JSON은
+  // 정상. exception.stdout 경유로 우회.
+  let json = "";
+  try {
+    json = execSync(
+      `npx lighthouse "${URL}" --quiet --output=json --chrome-flags="--headless=new --no-sandbox" --only-categories=performance,accessibility,best-practices,seo`,
+      { encoding: "utf8", stdio: ["pipe", "pipe", "ignore"], maxBuffer: 50 * 1024 * 1024 },
+    );
+  } catch (e) {
+    const err = e as { stdout?: string };
+    if (err.stdout && err.stdout.length > 1000) {
+      json = err.stdout;
+    } else {
+      throw e;
+    }
+  }
 
   const report = JSON.parse(json) as LhReport;
 
