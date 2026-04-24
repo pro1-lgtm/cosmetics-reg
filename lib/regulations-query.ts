@@ -123,8 +123,11 @@ export async function lookupRegulation(
     ? countries
     : Array.from(countryMap.keys());
 
+  // migration 0005: view regulations_active 는 valid_from <= now() AND
+  // (valid_to IS NULL OR valid_to > now()) 필터를 캡슐화.
+  // 기존 행은 valid_from default now()·valid_to null로 항상 활성.
   const { data: regs } = await supabase
-    .from("regulations")
+    .from("regulations_active")
     .select("*")
     .eq("ingredient_id", ingredient.id)
     .in("country_code", targetCountries);

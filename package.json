@@ -16,7 +16,8 @@
     "health": "tsx scripts/alerts/check-crawlers.ts",
     "enrich": "tsx scripts/enrich-names.ts",
     "enrich:functions": "tsx scripts/enrich-functions.ts",
-    "mfds:ingest": "tsx scripts/mfds/ingest.ts"
+    "mfds:ingest": "tsx scripts/mfds/ingest.ts",
+    "sources:seed": "tsx scripts/sources/seed.ts"
   },
   "dependencies": {
     "@google/genai": "^1.50.1",
