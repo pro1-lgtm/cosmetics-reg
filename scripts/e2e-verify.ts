@@ -152,6 +152,38 @@ async function main() {
   // injection 되면 전혀 다른 결과 또는 에러. sanitize 작동하면 "Retinol" 만으로 검색돼 결과 정상.
   record("T16 UI injection 방어", body16?.includes("Retinol") ?? false, `sanitized to Retinol`);
 
+  // T19 URL 딥링크 — /?q=Retinol 로 직접 진입 시 자동 검색
+  await page.goto(`${BASE}/?q=Retinol`, { waitUntil: "networkidle", timeout: 30_000 });
+  await page.locator("article").first().waitFor({ timeout: 15_000 });
+  const urlT19 = page.url();
+  const deepBody = await page.textContent("body");
+  record("T19 URL 딥링크 /?q=Retinol",
+    urlT19.includes("q=Retinol") && (deepBody?.includes("Retinol") ?? false),
+    `url=${urlT19.includes("q=Retinol")} content=${deepBody?.includes("Retinol")}`);
+
+  // T20 a11y attributes — combobox role + aria-expanded
+  await page.goto(BASE, { waitUntil: "networkidle", timeout: 30_000 });
+  const role = await page.locator('input[role="combobox"]').count();
+  const hasListbox = await page.locator('[role="listbox"]').count().catch(() => 0);
+  // type 후 listbox 나타나는지
+  await page.focus('input[role="combobox"]');
+  await page.type('input[role="combobox"]', "레티", { delay: 60 });
+  await page.locator('[role="listbox"] [role="option"]').first().waitFor({ timeout: 5_000 });
+  const listboxVisible = await page.locator('[role="listbox"]').isVisible();
+  const expanded = await page.locator('input[role="combobox"]').getAttribute("aria-expanded");
+  record("T20 a11y combobox + listbox",
+    role === 1 && listboxVisible && expanded === "true",
+    `role=${role} listbox-visible=${listboxVisible} expanded=${expanded} (initial listbox=${hasListbox})`);
+
+  // T21 /sources 대시보드 페이지
+  const srcRes = await page.goto(`${BASE}/sources`, { waitUntil: "networkidle", timeout: 30_000 });
+  const srcStatus = srcRes?.status() ?? 0;
+  const srcBody = await page.textContent("body");
+  record("T21 /sources 대시보드",
+    srcStatus === 200 && (srcBody?.includes("regulation_sources") ?? false),
+    `HTTP ${srcStatus} + 테이블 렌더`);
+  await page.screenshot({ path: `${SHOT_DIR}/t21-sources.png`, fullPage: true });
+
   await page.screenshot({ path: `${SHOT_DIR}/desktop-final.png`, fullPage: true });
   await ctx.close();
 
