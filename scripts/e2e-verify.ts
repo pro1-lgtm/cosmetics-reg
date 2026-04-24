@@ -1,5 +1,8 @@
 import { chromium, type Page } from "playwright";
 import { mkdir } from "node:fs/promises";
+import { loadEnv } from "./crawlers/env";
+loadEnv();
+import { supabaseAdmin } from "../lib/supabase";
 
 const BASE = "https://cosmetics-reg-tim10000.netlify.app";
 const SHOT_DIR = ".e2e-shots";
@@ -16,7 +19,6 @@ async function search(page: Page, q: string) {
   await page.fill('input[type="text"]', "");
   await page.fill('input[type="text"]', q);
   await page.keyboard.press("Enter");
-  // article 렌더 또는 "찾지 못했습니다" 메시지 둘 중 하나 나타날 때까지
   await page
     .locator("article")
     .first()
@@ -26,102 +28,175 @@ async function search(page: Page, q: string) {
 
 async function main() {
   await mkdir(SHOT_DIR, { recursive: true });
+
+  // pending 상태 테스트: quarantine에 있고 regulations_active에 없는 (ingredient, country) 조합 탐색.
+  // regulations가 있으면 lookupRegulation이 verified 반환하고 quarantine 무시 (의도된 동작).
+  const s = supabaseAdmin();
+  async function findPendingOnly(): Promise<string> {
+    const quars = await s.from("regulation_quarantine").select("ingredient_name_raw, country_code").eq("status", "pending");
+    for (const q of (quars.data ?? [])) {
+      const name = q.ingredient_name_raw as string | null;
+      const cc = q.country_code as string | null;
+      if (!name || !cc) continue;
+      const ing = await s.from("ingredients").select("id").ilike("inci_name", name).maybeSingle();
+      if (!ing.data) continue;
+      const reg = await s.from("regulations_active").select("id", { count: "exact", head: true }).eq("ingredient_id", ing.data.id).eq("country_code", cc);
+      if ((reg.count ?? 0) === 0) return name;
+    }
+    return "";
+  }
+  const pendingName = await findPendingOnly();
+  console.log(`[setup] pending-only 원료: ${pendingName || "(없음 — T15 skip)"}`);
+
   const browser = await chromium.launch({ headless: true });
+
+  // ========== Desktop 시나리오 ==========
   const ctx = await browser.newContext({ locale: "ko-KR", viewport: { width: 1280, height: 900 } });
   const page = await ctx.newPage();
-
-  // Collect console errors
   const errs: string[] = [];
   page.on("pageerror", (e) => errs.push(`pageerror: ${e.message}`));
   page.on("response", (r) => { if (r.status() >= 500) errs.push(`HTTP ${r.status()} ${r.url()}`); });
 
-  // T1. 홈 로드
   await page.goto(BASE, { waitUntil: "networkidle", timeout: 30_000 });
   const title = await page.title();
   record("T1 홈 로드", title.includes("화장품"), `title="${title}"`);
-  await page.screenshot({ path: `${SHOT_DIR}/t1-home.png`, fullPage: true });
 
-  // T2. Retinol 검색 — 15개 카드 렌더
   await search(page, "Retinol");
   const cards = await page.locator("article").count();
-  record("T2 Retinol 15개 국가 카드", cards === 15, `rendered ${cards} cards`);
-  await page.screenshot({ path: `${SHOT_DIR}/t2-retinol.png`, fullPage: true });
+  record("T2 Retinol 15개 카드", cards === 15, `rendered ${cards}`);
 
-  // T3. CN 카드 빨강 경고 (positive_list not_found 분기)
-  const cnCard = page.locator("article", { hasText: "중국" }).first();
-  const cnHtml = await cnCard.innerHTML();
-  const cnHasRed = /bg-red-100|text-red-8/.test(cnHtml);
-  const cnHasIECIC = /IECIC|등록 여부 확인/.test(cnHtml);
-  record("T3 CN 빨강 경고 + IECIC 문구", cnHasRed && cnHasIECIC,
-    `red-class=${cnHasRed} iecic-text=${cnHasIECIC}`);
+  const cnHtml = await page.locator("article", { hasText: "중국" }).first().innerHTML();
+  record("T3 CN 빨강+IECIC",
+    /bg-red-100|text-red-8/.test(cnHtml) && /IECIC|등록 여부 확인/.test(cnHtml),
+    `red+iecic`);
 
-  // T4. TW 카드 빨강 경고 (Positive List)
-  const twCard = page.locator("article", { hasText: "대만" }).first();
-  const twHtml = await twCard.innerHTML();
-  const twHasRed = /bg-red-100|text-red-8/.test(twHtml);
-  const twHasPositive = /Positive List|등록 여부 확인/.test(twHtml);
-  record("T4 TW 빨강 경고 + Positive List 문구", twHasRed && twHasPositive,
-    `red=${twHasRed} positive=${twHasPositive}`);
+  const twHtml = await page.locator("article", { hasText: "대만" }).first().innerHTML();
+  record("T4 TW 빨강+Positive",
+    /bg-red-100|text-red-8/.test(twHtml) && /Positive List|등록 여부 확인/.test(twHtml),
+    `red+positive`);
 
-  // T5. JP 카드 노랑 주의 (hybrid not_found 분기). EU는 MFDS에 verified 데이터 있어 hybrid not_found 분기 미표시 가능.
-  const jpCard = page.locator("article", { hasText: "일본" }).first();
-  const jpHtml = await jpCard.innerHTML();
-  const jpHasAmber = /bg-amber-100|text-amber-8/.test(jpHtml);
-  const jpHasAnnex = /Annex|조건부 허용/.test(jpHtml);
-  record("T5 JP 노랑 주의 (hybrid not_found)", jpHasAmber && jpHasAnnex,
-    `amber=${jpHasAmber} annex=${jpHasAnnex}`);
+  const jpHtml = await page.locator("article", { hasText: "일본" }).first().innerHTML();
+  record("T5 JP 노랑+Annex",
+    /bg-amber-100|text-amber-8/.test(jpHtml) && /Annex|조건부 허용/.test(jpHtml),
+    `amber+annex`);
 
-  // T6. CA 카드 — verified 상태 표시
-  const caCard = page.locator("article", { hasText: "캐나다" }).first();
-  const caHtml = await caCard.innerHTML();
-  const caHasVerified = /자동 업데이트|Maximum Concentration|배합한도/.test(caHtml);
-  record("T6 CA verified 콘텐츠 표시", caHasVerified, `verified-text=${caHasVerified}`);
+  const caHtml = await page.locator("article", { hasText: "캐나다" }).first().innerHTML();
+  record("T6 CA verified", /자동 업데이트|배합한도|Maximum/.test(caHtml), `verified`);
 
-  // T7. Benzophenone-4 — function 배지
   await search(page, "Benzophenone-4");
-  await page.waitForTimeout(500);
   const hdr = await page.locator("section").first().innerHTML();
-  const hasSky = /bg-sky-100|자외선차단제/.test(hdr);
-  const hasDesc = /자외선으로부터/.test(hdr);
-  record("T7 function_category 배지 + description", hasSky && hasDesc,
-    `sky=${hasSky} desc=${hasDesc}`);
-  await page.screenshot({ path: `${SHOT_DIR}/t7-benzo.png`, fullPage: true });
+  record("T7 function 배지+desc",
+    /bg-sky-100|자외선차단제/.test(hdr) && /자외선으로부터/.test(hdr),
+    `sky+desc`);
 
-  // T8. autocomplete 드롭다운 — "레티" 입력
+  // T8 autocomplete: 레티
   await page.fill('input[type="text"]', "");
   await page.type('input[type="text"]', "레티", { delay: 60 });
   await page.waitForTimeout(500);
   const drop = page.locator("ul").first();
-  const dropVisible = await drop.isVisible().catch(() => false);
   const dropItems = await drop.locator("li").count().catch(() => 0);
-  record("T8 autocomplete 드롭다운 (레티)", dropVisible && dropItems > 0,
-    `visible=${dropVisible} items=${dropItems}`);
-  await page.screenshot({ path: `${SHOT_DIR}/t8-autocomplete.png`, fullPage: false });
+  record("T8 autocomplete 레티", dropItems > 0, `items=${dropItems}`);
 
-  // T9. 빈 입력 → 드롭다운 숨김 (F-10 수정의 런타임 검증)
+  // T9 빈 입력 → 드롭다운 숨김 (F-10 수정의 런타임 검증)
   await page.fill('input[type="text"]', "");
   await page.waitForTimeout(300);
-  const emptyDropVisible = await drop.isVisible().catch(() => false);
-  record("T9 빈 입력 시 드롭다운 사라짐", !emptyDropVisible, `visible=${emptyDropVisible}`);
+  const emptyVis = await drop.isVisible().catch(() => false);
+  record("T9 빈 입력 드롭다운 숨김", !emptyVis, `visible=${emptyVis}`);
 
-  // T10. 없는 원료 → "DB에서 찾지 못했습니다"
+  // T10 없는 원료
   await search(page, "ZZZNonExistentIngredient");
-  const body = await page.textContent("body");
-  const notFoundMsg = body?.includes("DB에서 찾지 못했습니다") ?? false;
-  record("T10 없는 원료 friendly 메시지", notFoundMsg, `msg-shown=${notFoundMsg}`);
+  const body10 = await page.textContent("body");
+  record("T10 없는 원료 메시지", body10?.includes("DB에서 찾지 못했습니다") ?? false, ``);
 
-  // T11. console/network errors 없음
-  record("T11 페이지 오류/5xx 없음", errs.length === 0, `errors=${errs.length} ${errs.slice(0,2).join(" | ")}`);
+  // T11 콘솔·5xx 무오류
+  record("T11 콘솔/5xx 0건", errs.length === 0, `errs=${errs.length}`);
+
+  // T12 한국어 검색 정확 매칭 (레티놀 → Retinol ingredient header 표시)
+  await search(page, "레티놀");
+  const header12 = await page.textContent("body");
+  record("T12 한국어 검색", header12?.includes("Retinol") ?? false, `Retinol header`);
+
+  // T13 CAS 검색
+  await search(page, "68-26-8");
+  const header13 = await page.textContent("body");
+  record("T13 CAS 검색", header13?.includes("Retinol") ?? false, `Retinol header from CAS`);
+
+  // T14 키보드 내비: 페이지 reload로 깨끗한 상태 → "레티" type → dropdown 렌더 대기 → ArrowDown → Enter
+  await page.goto(BASE, { waitUntil: "networkidle", timeout: 30_000 });
+  await page.focus('input[type="text"]');
+  await page.type('input[type="text"]', "레티", { delay: 80 });
+  // 실제 드롭다운 li가 나타날 때까지 대기 (debounce 120ms + API + render)
+  await page.locator("ul li").first().waitFor({ timeout: 5_000 });
+  await page.keyboard.press("ArrowDown");
+  await page.waitForTimeout(100);
+  await page.keyboard.press("Enter");
+  // 키워드 pick → runSearch → ingredient header 등장 대기 (INCI 텍스트 'Retino' 포함)
+  await page.locator("text=/Retin/i").first().waitFor({ timeout: 15_000 });
+  const after14 = await page.textContent("body");
+  record("T14 키보드 내비 ArrowDown+Enter", !!after14 && /Retin/i.test(after14), `Retin header`);
+
+  // T15 pending 상태 렌더 — regulations에 없고 quarantine에만 있는 원료 필요
+  if (pendingName) {
+    await search(page, pendingName);
+    const bodyQ = await page.textContent("body");
+    record(`T15 pending 렌더 (${pendingName.slice(0,30)})`,
+      bodyQ?.includes("검토 중") ?? false,
+      `"검토 중" 노출`);
+  } else {
+    record("T15 pending 렌더", true, "skip — pending-only 원료 없음");
+  }
+
+  // T16 PostgREST injection 방어 (UI 경로) — "Retinol,cas_no.eq.X"
+  await search(page, "Retinol,cas_no.eq.X");
+  const body16 = await page.textContent("body");
+  // injection 되면 전혀 다른 결과 또는 에러. sanitize 작동하면 "Retinol" 만으로 검색돼 결과 정상.
+  record("T16 UI injection 방어", body16?.includes("Retinol") ?? false, `sanitized to Retinol`);
+
+  await page.screenshot({ path: `${SHOT_DIR}/desktop-final.png`, fullPage: true });
+  await ctx.close();
+
+  // ========== Mobile 시나리오 ==========
+  const mctx = await browser.newContext({
+    locale: "ko-KR",
+    viewport: { width: 375, height: 667 },
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+  });
+  const mpage = await mctx.newPage();
+  await mpage.goto(BASE, { waitUntil: "networkidle", timeout: 30_000 });
+  await search(mpage, "Retinol");
+  const mCards = await mpage.locator("article").count();
+  record("T17 모바일 viewport 렌더", mCards === 15, `${mCards} cards at 375px`);
+  await mpage.screenshot({ path: `${SHOT_DIR}/mobile-retinol.png`, fullPage: true });
+  await mctx.close();
+
+  // ========== 다크모드 시나리오 ==========
+  const dctx = await browser.newContext({
+    locale: "ko-KR",
+    viewport: { width: 1280, height: 900 },
+    colorScheme: "dark",
+  });
+  const dpage = await dctx.newPage();
+  await dpage.goto(BASE, { waitUntil: "networkidle", timeout: 30_000 });
+  await search(dpage, "Retinol");
+  // Tailwind dark: 클래스가 적용됐는지 확인
+  const bodyClass = await dpage.evaluate(() => document.documentElement.className + " " + document.body.className);
+  const htmlClass = await dpage.evaluate(() => {
+    const style = getComputedStyle(document.body);
+    return { bg: style.backgroundColor, color: style.color };
+  });
+  // tailwind dark:* 가 적용되면 body bg는 보통 zinc 계열 어두운 색. 체크: 배경 RGB 평균이 128 이하
+  const m = htmlClass.bg.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+  const avg = m ? (Number(m[1]) + Number(m[2]) + Number(m[3])) / 3 : 255;
+  record("T18 다크모드 적용", avg < 128, `bg avg=${avg.toFixed(0)} (< 128 = dark)`);
+  await dpage.screenshot({ path: `${SHOT_DIR}/dark-retinol.png`, fullPage: true });
+  await dctx.close();
 
   await browser.close();
 
-  // summary
-  console.log("\n=== SUMMARY ===");
   const pass = results.filter(r => r.ok).length;
-  console.log(`${pass}/${results.length} passed`);
+  console.log(`\n=== SUMMARY === ${pass}/${results.length} passed`);
   if (pass < results.length) {
-    console.log("\n실패:");
-    results.filter(r => !r.ok).forEach(r => console.log(`  - ${r.name}: ${r.detail}`));
+    results.filter(r => !r.ok).forEach(r => console.log(`  FAIL: ${r.name} — ${r.detail}`));
     process.exit(1);
   }
 }

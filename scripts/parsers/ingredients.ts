@@ -28,14 +28,15 @@ export async function findOrCreateIngredient(
     if (data?.id) return data.id;
   }
 
-  // 3) Synonyms array contains
+  // 3) Synonyms array contains — 동일 synonym이 여러 원료에 들어있을 수 있으니
+  // maybeSingle 금지 (2건+ 매치 시 PostgREST가 error 반환). limit(1)로 첫 건 사용.
   {
     const { data } = await supabase
       .from("ingredients")
       .select("id")
       .contains("synonyms", [inci])
-      .maybeSingle();
-    if (data?.id) return data.id;
+      .limit(1);
+    if (data?.[0]?.id) return data[0].id;
   }
 
   // 4) Create new
