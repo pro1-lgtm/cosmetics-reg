@@ -234,6 +234,18 @@ function IngredientHeader({ ingredient }: { ingredient: NonNullable<LookupRespon
           </>
         )}
       </dl>
+      {ingredient.function_category && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="inline-block rounded-md bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-800 dark:bg-sky-950/60 dark:text-sky-200">
+            {ingredient.function_category}
+          </span>
+          {ingredient.function_description && (
+            <span className="text-xs text-zinc-600 dark:text-zinc-400">
+              {ingredient.function_description}
+            </span>
+          )}
+        </div>
+      )}
       {ingredient.description && (
         <p className="mt-3 rounded-md bg-zinc-50 px-3 py-2 text-xs leading-relaxed text-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300">
           {ingredient.description}
@@ -359,17 +371,50 @@ function CountryCard({ result }: { result: CountryLookupResult }) {
         </div>
       )}
 
-      {result.source === "not_found" && (
-        <div className="space-y-1">
-          <span className="inline-block rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200">
-            금지·제한 목록 미수록
-          </span>
-          <p className="text-[11px] text-zinc-500">
-            사용제한·금지 데이터에 없음 — 일반 사용 가능 가능성이 높으나, 최종 확인은 공식 원문 권장
-          </p>
-        </div>
-      )}
+      {result.source === "not_found" && <NotFoundByRegType result={result} />}
     </article>
+  );
+}
+
+function NotFoundByRegType({ result }: { result: CountryLookupResult }) {
+  if (result.regulation_type === "positive_list") {
+    const listName = result.country_code === "CN" ? "IECIC" : "Positive List";
+    return (
+      <div className="space-y-1">
+        <span className="inline-block rounded-md bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800 dark:bg-red-950/60 dark:text-red-200">
+          ⚠ {listName} 등록 여부 확인 필요
+        </span>
+        <p className="text-[11px] leading-relaxed text-red-700 dark:text-red-300">
+          {result.country_name_ko}은(는) <b>positive list</b> 규제 — 목록에 없는 원료는 사용 불가.
+          금지 목록 미수록이 곧 사용 가능을 의미하지 않음. 공식 {listName} 등재 여부 반드시 확인.
+        </p>
+      </div>
+    );
+  }
+
+  if (result.regulation_type === "hybrid") {
+    return (
+      <div className="space-y-1">
+        <span className="inline-block rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
+          Annex 미수록 (조건부 허용)
+        </span>
+        <p className="text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
+          일반 원료는 허용되지만 <b>보존제·색소·자외선차단제</b> 등 특정 카테고리는 Annex positive
+          list 등재가 필요. 해당 카테고리라면 공식 Annex 원문을 확인해야 함.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <span className="inline-block rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200">
+        금지·제한 목록 미수록
+      </span>
+      <p className="text-[11px] text-zinc-500">
+        사용제한·금지 데이터에 없음 — 일반 사용 가능 가능성이 높으나, 최종 확인은 공식 원문 권장
+      </p>
+    </div>
   );
 }
 

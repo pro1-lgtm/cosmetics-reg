@@ -8,13 +8,15 @@ function sanitizeIlikeValue(s: string): string {
 }
 
 const INGREDIENT_COLS =
-  "id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms, description";
+  "id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms, description, function_category, function_description";
 
 export type LookupSource = "verified" | "pending" | "not_found";
+export type RegulationType = "negative_list" | "positive_list" | "hybrid";
 
 export interface CountryLookupResult {
   country_code: string;
   country_name_ko: string;
+  regulation_type: RegulationType;
   source: LookupSource;
   status?: "banned" | "restricted" | "allowed" | "listed" | "not_listed";
   max_concentration?: number | null;
@@ -39,6 +41,8 @@ export interface IngredientMatch {
   cas_no: string | null;
   synonyms: string[];
   description: string | null;
+  function_category: string | null;
+  function_description: string | null;
 }
 
 export interface LookupResponse {
@@ -102,12 +106,16 @@ export async function lookupRegulation(
 
   const { data: countryRows } = await supabase
     .from("countries")
-    .select("code, name_ko, inherits_from");
-  const countryMap = new Map<string, { name_ko: string; inherits_from: string | null }>();
+    .select("code, name_ko, inherits_from, regulation_type");
+  const countryMap = new Map<
+    string,
+    { name_ko: string; inherits_from: string | null; regulation_type: RegulationType }
+  >();
   (countryRows ?? []).forEach((c) =>
     countryMap.set(c.code as string, {
       name_ko: c.name_ko as string,
       inherits_from: (c.inherits_from as string) ?? null,
+      regulation_type: ((c.regulation_type as RegulationType) ?? "negative_list"),
     }),
   );
 
@@ -155,6 +163,7 @@ export async function lookupRegulation(
       results.push({
         country_code: code,
         country_name_ko: meta.name_ko,
+        regulation_type: meta.regulation_type,
         source: "verified",
         status: row.status,
         max_concentration: row.max_concentration,
@@ -176,6 +185,7 @@ export async function lookupRegulation(
       results.push({
         country_code: code,
         country_name_ko: meta.name_ko,
+        regulation_type: meta.regulation_type,
         source: "pending",
         pending_reason: quar.rejection_reason,
       });
@@ -185,6 +195,7 @@ export async function lookupRegulation(
     results.push({
       country_code: code,
       country_name_ko: meta.name_ko,
+      regulation_type: meta.regulation_type,
       source: "not_found",
     });
   }

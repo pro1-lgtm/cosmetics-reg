@@ -15,6 +15,7 @@
     "parse:us": "tsx scripts/parsers/run.ts US",
     "health": "tsx scripts/alerts/check-crawlers.ts",
     "enrich": "tsx scripts/enrich-names.ts",
+    "enrich:functions": "tsx scripts/enrich-functions.ts",
     "mfds:ingest": "tsx scripts/mfds/ingest.ts"
   },
   "dependencies": {
