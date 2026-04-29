@@ -6,15 +6,11 @@ loadEnv();
 import { readRows, writeRows } from "../../lib/json-store";
 import { launchContext } from "./playwright-helper";
 
-// 차단된 정부 사이트 (canada.ca / eur-lex / nmpa / gov.br anvisa / argentina anmat) 의
-// 메인 페이지 raw HTML 자동 fetch. GitHub Actions runner (미국 IP) 에서 실 작동 시도.
-//
-// 사용: npm run fetch:try -- <country> <url> <key>
-// 예: npm run fetch:try -- EU https://eur-lex.europa.eu/.../1223 eu_eurlex_1223
-//
-// 결과: .crawl-raw/generic/<key>.html + public/data/sources-raw-html.json metadata.
+// 차단된 정부 사이트 fetch (GitHub Actions runner 미국 IP). 사이트별 파서 작성 위해
+// raw HTML 도 git commit (사이트마다 한 번 분석 후 fetcher 추가, 그 후 raw 저장 안 해도 됨).
 
 const RAW_DIR = ".crawl-raw/generic";
+const PUBLIC_RAW_DIR = "public/data/raw-html";
 
 interface SourceRawHtml {
   key: string;
@@ -36,7 +32,9 @@ async function main() {
   }
 
   await mkdir(RAW_DIR, { recursive: true });
+  await mkdir(PUBLIC_RAW_DIR, { recursive: true });
   const dest = join(RAW_DIR, `${key}.html`);
+  const publicDest = join(PUBLIC_RAW_DIR, `${key}.html`);
 
   const existing = await readRows<SourceRawHtml>("sources-raw-html");
   const byKey = new Map(existing.map((r) => [r.key, r]));
@@ -55,6 +53,8 @@ async function main() {
       const html = await ctx.fetchHtml(url, { timeoutMs: 60_000 });
       const hash = createHash("sha256").update(html).digest("hex").slice(0, 16);
       await writeFile(dest, html, "utf8");
+      // public 사본 — git commit 되어 사용자 PC 에서 분석 가능 (사이트별 파서 작성 후 제거 가능)
+      await writeFile(publicDest, html, "utf8");
       row = { ...row, size_bytes: html.length, content_hash: hash, http_status: 200, success: true };
       console.log(`  ✓ ${html.length} bytes hash=${hash}`);
     } finally {
