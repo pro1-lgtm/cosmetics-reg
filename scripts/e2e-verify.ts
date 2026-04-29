@@ -79,9 +79,11 @@ async function main() {
   record("T2 Retinol 15개 카드", cards === 15, `rendered ${cards}`);
 
   const cnHtml = await page.locator("article", { hasText: "중국" }).first().innerHTML();
-  record("T3 CN 빨강+IECIC",
-    /bg-red-100|text-red-8/.test(cnHtml) && /IECIC|등록 여부 확인/.test(cnHtml),
-    `red+iecic`);
+  // Retinol 이 IECIC 등재 확인됨 (NMPA 1차 데이터) — listed 상태 표시 정상.
+  // 미등재 ingredient 의 빨강 경고 분기는 별도 시나리오 (T3b) 에서 검증.
+  record("T3 CN IECIC 등재 표시",
+    /listed|수록|IECIC/.test(cnHtml) && !/DB에서 찾지 못했습니다/.test(cnHtml),
+    `cn card present`);
 
   const twHtml = await page.locator("article", { hasText: "대만" }).first().innerHTML();
   record("T4 TW 빨강+Positive",

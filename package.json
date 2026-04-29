@@ -16,6 +16,7 @@
     "enrich:functions": "tsx scripts/enrich-functions.ts",
     "mfds:ingest": "tsx scripts/mfds/ingest.ts",
     "us:ingest": "tsx scripts/fetchers/us-ecfr.ts",
+    "cn:iecic": "tsx scripts/fetchers/cn-nmpa-iecic.ts",
     "sources:seed": "tsx scripts/sources/seed.ts",
     "e2e": "tsx scripts/e2e-verify.ts",
     "lighthouse": "tsx scripts/lighthouse.ts"
