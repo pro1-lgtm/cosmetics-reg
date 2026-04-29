@@ -24,7 +24,15 @@ export async function launchContext(opts: {
   acceptLang?: string;
   warmupUrl?: string;       // 세션 cookie 받을 페이지 (옵션)
 } = {}): Promise<BrowserCtx> {
-  const browser = await chromium.launch({ headless: true });
+  // 시스템 Chrome 우선 사용 — Playwright bundled Chromium 은 Windows 방화벽이
+  // "새 앱" 으로 인식해 매번 차단 알림 (또는 자동 deny). 시스템 Chrome 은 이미
+  // 방화벽 허용된 상태. 시스템 Chrome 없으면 자동 fallback (bundled chromium).
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true, channel: "chrome" });
+  } catch {
+    browser = await chromium.launch({ headless: true });
+  }
   const context = await browser.newContext({
     locale: opts.acceptLang === "zh-CN" ? "zh-CN" : "ko-KR",
     viewport: { width: 1280, height: 900 },

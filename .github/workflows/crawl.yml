@@ -36,6 +36,13 @@ jobs:
         run: npm run us:ingest
         continue-on-error: true
 
+      - name: Install Playwright Chromium for fetcher
+        run: npx playwright install --with-deps chromium
+
+      - name: Refresh CN NMPA IECIC (Playwright)
+        run: npm run cn:iecic
+        continue-on-error: true
+
       # 3) 보조 HTML 소스 hash diff → source-status.json + detected-changes.json + .crawl-raw/
       - name: Crawl HTML sources
         run: npm run crawl
