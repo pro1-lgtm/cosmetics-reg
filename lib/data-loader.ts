@@ -57,6 +57,18 @@ export interface Meta {
   };
 }
 
+export interface SourcePdf {
+  key: string;
+  title: string;
+  url: string;
+  country: string;
+  lang: string;
+  file_path: string;
+  size_bytes: number;
+  downloaded_at: string;
+  content_hash: string;
+}
+
 export interface KciaArticle {
   no: string;
   title: string;
@@ -86,6 +98,8 @@ export interface Dataset {
   quarantineByCountryName: Map<string, Map<string, QuarantineRow>>;
   // KCIA articles: country_code → article[] (보조 정보)
   kciaByCountry: Map<string, KciaArticle[]>;
+  // 1차 소스 PDF (자동 다운로드 — link 만 사용자에 노출)
+  sourcePdfsByCountry: Map<string, SourcePdf[]>;
 }
 
 let cached: Promise<Dataset> | null = null;
@@ -97,13 +111,14 @@ async function fetchJson<T>(path: string): Promise<T> {
 }
 
 async function loadDataset(): Promise<Dataset> {
-  const [metaPayload, ingPayload, regPayload, ctyPayload, quarPayload, kciaPayload] = await Promise.all([
+  const [metaPayload, ingPayload, regPayload, ctyPayload, quarPayload, kciaPayload, srcPdfPayload] = await Promise.all([
     fetchJson<Meta>("/data/meta.json"),
     fetchJson<{ rows: Ingredient[] }>("/data/ingredients.json"),
     fetchJson<{ rows: Regulation[] }>("/data/regulations.json"),
     fetchJson<{ rows: Country[] }>("/data/countries.json"),
     fetchJson<{ rows: QuarantineRow[] }>("/data/quarantine.json"),
     fetchJson<{ rows: KciaArticle[] }>("/data/kcia-articles.json").catch(() => ({ rows: [] })),
+    fetchJson<{ rows: SourcePdf[] }>("/data/sources-pdf.json").catch(() => ({ rows: [] })),
   ]);
 
   const ingredients = ingPayload.rows;
@@ -176,9 +191,16 @@ async function loadDataset(): Promise<Dataset> {
     if (!bucket) { bucket = []; kciaByCountry.set(a.country_inferred, bucket); }
     bucket.push(a);
   }
-  // 각 country bucket 최신순 정렬
   for (const bucket of kciaByCountry.values()) {
     bucket.sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+  }
+
+  const sourcePdfs = srcPdfPayload.rows;
+  const sourcePdfsByCountry = new Map<string, SourcePdf[]>();
+  for (const p of sourcePdfs) {
+    let bucket = sourcePdfsByCountry.get(p.country);
+    if (!bucket) { bucket = []; sourcePdfsByCountry.set(p.country, bucket); }
+    bucket.push(p);
   }
 
   return {
@@ -193,6 +215,7 @@ async function loadDataset(): Promise<Dataset> {
     countryByCode,
     quarantineByCountryName,
     kciaByCountry,
+    sourcePdfsByCountry,
   };
 }
 

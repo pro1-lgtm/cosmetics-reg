@@ -397,6 +397,30 @@ function CountryCard({ result }: { result: CountryLookupResult }) {
 
       {result.source === "not_found" && <NotFoundByRegType result={result} />}
 
+      {result.source_pdfs && result.source_pdfs.length > 0 && (
+        <details className="mt-3 text-[11px] text-zinc-600 dark:text-zinc-400">
+          <summary className="cursor-pointer text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">
+            1차 소스 PDF (자동 갱신) {result.source_pdfs.length}건
+          </summary>
+          <ul className="mt-1.5 space-y-1">
+            {result.source_pdfs.map((p) => (
+              <li key={p.key} className="flex items-baseline gap-1.5">
+                <span className="text-zinc-400 tabular-nums">{p.lang === "en" ? "EN" : p.lang === "ja" ? "JA" : p.lang.toUpperCase()}</span>
+                <a
+                  href={p.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 text-zinc-700 underline decoration-dotted hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-50"
+                >
+                  {p.title}
+                </a>
+                <span className="text-[10px] text-zinc-400">{(p.size_bytes / 1024).toFixed(0)}KB</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
       {result.kcia_articles && result.kcia_articles.length > 0 && (
         <details className="mt-3 text-[11px] text-zinc-600 dark:text-zinc-400">
           <summary className="cursor-pointer text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">
