@@ -19,6 +19,7 @@
     "cn:iecic": "tsx scripts/fetchers/cn-nmpa-iecic.ts",
     "ca:hotlist": "tsx scripts/fetchers/ca-hotlist.ts",
     "fetch:try": "tsx scripts/fetchers/generic-playwright.ts",
+    "eu:pdf": "tsx scripts/fetchers/eu-eurlex-pdf.ts",
     "kcia:articles": "tsx scripts/fetchers/kcia-articles.ts",
     "jp:mhlw": "tsx scripts/fetchers/jp-mhlw.ts",
     "jp:parse": "tsx scripts/fetchers/jp-mhlw-parse.ts",
