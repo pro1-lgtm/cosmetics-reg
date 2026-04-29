@@ -1,4 +1,4 @@
-import { supabaseClient } from "./supabase";
+import { dataset } from "./data-loader";
 
 export interface Suggestion {
   inci_name: string;
@@ -6,8 +6,6 @@ export interface Suggestion {
   cas_no: string | null;
 }
 
-// Sanitize user input: remove chars that could become unintended ILIKE wildcards
-// (%, _) or other metachars. PostgREST .or() string is not used here.
 function sanitize(s: string): string {
   return s.replace(/[,()%_\\"]/g, " ").trim();
 }
@@ -15,38 +13,38 @@ function sanitize(s: string): string {
 export async function fetchSuggestions(rawQuery: string, signal?: AbortSignal): Promise<Suggestion[]> {
   const raw = rawQuery.trim();
   if (raw.length === 0 || raw.length > 128) return [];
-  const safe = sanitize(raw);
+  const safe = sanitize(raw).toLowerCase();
   if (safe.length < 1) return [];
 
-  const supabase = supabaseClient();
-  const pattern = `${safe}%`;
+  const ds = await dataset();
+  if (signal?.aborted) return [];
 
-  const [kr, eng] = await Promise.all([
-    supabase
-      .from("ingredients")
-      .select("inci_name, korean_name, cas_no")
-      .ilike("korean_name", pattern)
-      .order("korean_name", { ascending: true })
-      .limit(8)
-      .abortSignal(signal as AbortSignal),
-    supabase
-      .from("ingredients")
-      .select("inci_name, korean_name, cas_no")
-      .ilike("inci_name", pattern)
-      .order("inci_name", { ascending: true })
-      .limit(8)
-      .abortSignal(signal as AbortSignal),
-  ]);
-  if (kr.error) throw new Error(kr.error.message);
-  if (eng.error) throw new Error(eng.error.message);
-
+  const results: Suggestion[] = [];
   const seen = new Set<string>();
-  const merged: Suggestion[] = [];
-  for (const row of [...(kr.data ?? []), ...(eng.data ?? [])]) {
-    if (seen.has(row.inci_name)) continue;
-    seen.add(row.inci_name);
-    merged.push(row as Suggestion);
-    if (merged.length >= 8) break;
+
+  // 1) Korean prefix
+  for (const ing of ds.ingredients) {
+    if (results.length >= 8) break;
+    if (signal?.aborted) return [];
+    if (ing.korean_name && ing.korean_name.toLowerCase().startsWith(safe)) {
+      if (!seen.has(ing.inci_name)) {
+        seen.add(ing.inci_name);
+        results.push({ inci_name: ing.inci_name, korean_name: ing.korean_name, cas_no: ing.cas_no });
+      }
+    }
   }
-  return merged;
+
+  // 2) INCI prefix
+  for (const ing of ds.ingredients) {
+    if (results.length >= 8) break;
+    if (signal?.aborted) return [];
+    if (ing.inci_name && ing.inci_name.toLowerCase().startsWith(safe)) {
+      if (!seen.has(ing.inci_name)) {
+        seen.add(ing.inci_name);
+        results.push({ inci_name: ing.inci_name, korean_name: ing.korean_name, cas_no: ing.cas_no });
+      }
+    }
+  }
+
+  return results;
 }

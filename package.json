@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "serve": "npx --yes serve out -l 3010",
+    "export-data": "tsx scripts/export-data.ts",
     "lint": "eslint",
     "verify": "tsx scripts/verify-setup.ts",
     "crawl": "tsx scripts/crawlers/run.ts",

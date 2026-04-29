@@ -1,14 +1,7 @@
-import { supabaseClient } from "./supabase";
+import { dataset, type Ingredient } from "./data-loader";
 
-// Escape PostgREST ILIKE special chars AND filter-string separators. Commas, parens,
-// backslashes, and wildcards (%, _) can let user input corrupt an `or()` filter string
-// or inject additional filters. Removing them is safer than half-escaping.
-function sanitizeIlikeValue(s: string): string {
-  return s.replace(/[,()%_\\"]/g, " ").trim();
-}
-
-const INGREDIENT_COLS =
-  "id, inci_name, korean_name, chinese_name, japanese_name, cas_no, synonyms, description, function_category, function_description";
+// 인메모리 검색 — Phase 5: Supabase 의존 제거.
+// public/data/*.json (브라우저 ETag 자동 비교) 의 인덱스만 사용.
 
 export type LookupSource = "verified" | "pending" | "not_found";
 export type RegulationType = "negative_list" | "positive_list" | "hybrid";
@@ -51,124 +44,85 @@ export interface LookupResponse {
   results: CountryLookupResult[];
 }
 
+function sanitize(s: string): string {
+  return s.replace(/[,()%_\\"]/g, " ").trim();
+}
+
+function findIngredient(query: string): Ingredient | null {
+  // 비동기 호출 가능을 위해 dataset() await 가 외부에서 보장됨 (lookupRegulation 가 await)
+  // 여기선 sync 보조함수
+  return null;
+}
+
+function findIngredientSync(
+  query: string,
+  ds: Awaited<ReturnType<typeof dataset>>,
+): Ingredient | null {
+  const safe = sanitize(query).toLowerCase();
+  if (!safe) return null;
+
+  // 1) exact INCI
+  const inci = ds.ingredientByInciLower.get(safe);
+  if (inci) return inci;
+
+  // 2) exact Korean
+  const kor = ds.ingredientByKoreanLower.get(safe);
+  if (kor) return kor;
+
+  // 3) CAS 정확 매칭 (CAS 형식만)
+  if (/^\d{1,7}-\d{2}-\d$/.test(query.trim())) {
+    const cas = ds.ingredientByCas.get(query.trim());
+    if (cas) return cas;
+  }
+
+  // 4) substring 검색 — INCI / Korean / Chinese / Japanese
+  for (const ing of ds.ingredients) {
+    if (ing.inci_name && ing.inci_name.toLowerCase().includes(safe)) return ing;
+    if (ing.korean_name && ing.korean_name.toLowerCase().includes(safe)) return ing;
+    if (ing.chinese_name && ing.chinese_name.includes(query)) return ing;
+    if (ing.japanese_name && ing.japanese_name.includes(query)) return ing;
+  }
+  return null;
+}
+
 export async function lookupRegulation(
   query: string,
   countries?: string[],
 ): Promise<LookupResponse> {
-  const supabase = supabaseClient();
+  const ds = await dataset();
   const q = query.trim();
-  const safe = sanitizeIlikeValue(q);
-  if (!safe) return { query: q, ingredient: null, results: [] };
+  if (!q) return { query: q, ingredient: null, results: [] };
 
-  // Priority 1: exact INCI match
-  const { data: exact } = await supabase
-    .from("ingredients")
-    .select(INGREDIENT_COLS)
-    .ilike("inci_name", safe)
-    .limit(1);
-
-  // Priority 2: exact korean_name match
-  const { data: korExact } = exact?.length
-    ? { data: null }
-    : await supabase
-        .from("ingredients")
-        .select(INGREDIENT_COLS)
-        .ilike("korean_name", safe)
-        .limit(1);
-
-  // Priority 3: CAS substring match (multi-CAS stored as "A\nB")
-  const looksLikeCas = /^\d{1,7}-\d{2}-\d$/.test(q);
-  const { data: casMatch } =
-    exact?.length || korExact?.length || !looksLikeCas
-      ? { data: null }
-      : await supabase
-          .from("ingredients")
-          .select(INGREDIENT_COLS)
-          .ilike("cas_no", `%${safe}%`)
-          .limit(1);
-
-  // Priority 4: fuzzy substring across all name fields (parallel, no or() string)
-  let fuzzyMatch: IngredientMatch | undefined;
-  if (!exact?.length && !korExact?.length && !casMatch?.length) {
-    const pattern = `%${safe}%`;
-    const fields = ["inci_name", "korean_name", "chinese_name", "japanese_name"] as const;
-    const parallel = await Promise.all(
-      fields.map((f) =>
-        supabase.from("ingredients").select(INGREDIENT_COLS).ilike(f, pattern).limit(1),
-      ),
-    );
-    fuzzyMatch = parallel.map((r) => r.data?.[0]).find(Boolean) as IngredientMatch | undefined;
-  }
-
-  const ingredient =
-    (exact?.[0] ?? korExact?.[0] ?? casMatch?.[0] ?? fuzzyMatch) as IngredientMatch | undefined;
+  const ingredient = findIngredientSync(q, ds);
   if (!ingredient) return { query: q, ingredient: null, results: [] };
 
-  const { data: countryRows } = await supabase
-    .from("countries")
-    .select("code, name_ko, inherits_from, regulation_type");
-  const countryMap = new Map<
-    string,
-    { name_ko: string; inherits_from: string | null; regulation_type: RegulationType }
-  >();
-  (countryRows ?? []).forEach((c) =>
-    countryMap.set(c.code as string, {
-      name_ko: c.name_ko as string,
-      inherits_from: (c.inherits_from as string) ?? null,
-      regulation_type: ((c.regulation_type as RegulationType) ?? "negative_list"),
-    }),
-  );
-
-  const targetCountries = countries && countries.length > 0
+  const targetCodes = countries && countries.length > 0
     ? countries
-    : Array.from(countryMap.keys());
+    : ds.countries.map((c) => c.code);
 
-  // migration 0005: view regulations_active 는 valid_from <= now() AND
-  // (valid_to IS NULL OR valid_to > now()) 필터를 캡슐화.
-  // 기존 행은 valid_from default now()·valid_to null로 항상 활성.
-  const { data: regs } = await supabase
-    .from("regulations_active")
-    .select("*")
-    .eq("ingredient_id", ingredient.id)
-    .in("country_code", targetCountries);
-
-  const { data: quars } = await supabase
-    .from("regulation_quarantine")
-    .select("country_code, rejection_reason, status")
-    .eq("status", "pending")
-    .in("country_code", targetCountries)
-    .ilike("ingredient_name_raw", `%${ingredient.inci_name}%`);
-
-  type RegRow = NonNullable<typeof regs>[number];
-  type QuarRow = NonNullable<typeof quars>[number];
-  const regByCountry = new Map<string, RegRow>();
-  (regs ?? []).forEach((r) => regByCountry.set(r.country_code as string, r));
-  const quarByCountry = new Map<string, QuarRow>();
-  (quars ?? []).forEach((q) => quarByCountry.set(q.country_code as string, q));
+  const regsForIngredient = ds.regsByIngredientCountry.get(ingredient.id);
 
   const results: CountryLookupResult[] = [];
+  for (const code of targetCodes) {
+    const country = ds.countryByCode.get(code);
+    if (!country) continue;
 
-  for (const code of targetCountries) {
-    const meta = countryMap.get(code);
-    if (!meta) continue;
+    let row = regsForIngredient?.get(code);
 
-    // Direct verified row
-    let row = regByCountry.get(code);
-
-    // Inheritance: fall back to parent (e.g. VN inherits EU)
+    // 상속 fallback (예: VN inherits EU)
     let fromInherit: string | null = null;
-    if (!row && meta.inherits_from) {
-      row = regByCountry.get(meta.inherits_from);
-      if (row) fromInherit = meta.inherits_from;
+    if (!row && country.inherits_from) {
+      row = regsForIngredient?.get(country.inherits_from);
+      if (row) fromInherit = country.inherits_from;
     }
 
     if (row) {
       results.push({
         country_code: code,
-        country_name_ko: meta.name_ko,
-        regulation_type: meta.regulation_type,
+        country_name_ko: country.name_ko,
+        regulation_type: country.regulation_type,
         source: "verified",
-        status: row.status,
+        status: row.status as CountryLookupResult["status"],
         max_concentration: row.max_concentration,
         concentration_unit: row.concentration_unit,
         product_categories: row.product_categories ?? [],
@@ -183,22 +137,33 @@ export async function lookupRegulation(
       continue;
     }
 
-    const quar = quarByCountry.get(code);
-    if (quar) {
-      results.push({
-        country_code: code,
-        country_name_ko: meta.name_ko,
-        regulation_type: meta.regulation_type,
-        source: "pending",
-        pending_reason: quar.rejection_reason,
-      });
-      continue;
+    // quarantine pending lookup — name_raw substring match against current ingredient
+    const quarMap = ds.quarantineByCountryName.get(code);
+    if (quarMap) {
+      const lowerInci = ingredient.inci_name.toLowerCase();
+      let pendingHit: { rejection_reason: string | null } | null = null;
+      for (const [name, q] of quarMap) {
+        if (lowerInci.includes(name) || name.includes(lowerInci)) {
+          pendingHit = q;
+          break;
+        }
+      }
+      if (pendingHit) {
+        results.push({
+          country_code: code,
+          country_name_ko: country.name_ko,
+          regulation_type: country.regulation_type,
+          source: "pending",
+          pending_reason: pendingHit.rejection_reason ?? undefined,
+        });
+        continue;
+      }
     }
 
     results.push({
       country_code: code,
-      country_name_ko: meta.name_ko,
-      regulation_type: meta.regulation_type,
+      country_name_ko: country.name_ko,
+      regulation_type: country.regulation_type,
       source: "not_found",
     });
   }

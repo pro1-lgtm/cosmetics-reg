@@ -139,11 +139,11 @@ async function main() {
   const after14 = await page.textContent("body");
   record("T14 키보드 내비 ArrowDown+Enter", !!after14 && /Retin/i.test(after14), `Retin header`);
 
-  // T15 pending 상태 렌더 — regulations에 없고 quarantine에만 있는 원료 필요
+  // T15 pending 상태 렌더 — fresh URL 딥링크로 진입해 이전 검색 잔재 회피
   if (pendingName) {
-    await search(page, pendingName);
-    // "검토 중" 배지가 실제 DOM에 존재하는지 locator count로 확인 (body textContent보다 안정)
-    await page.waitForTimeout(800); // CountryCard 렌더 여유
+    await page.goto(`${BASE}/?q=${encodeURIComponent(pendingName)}`, { waitUntil: "networkidle", timeout: 30_000 });
+    await page.locator("article").first().waitFor({ timeout: 15_000 });
+    await page.waitForTimeout(500);
     const pendingBadges = await page.locator("text=검토 중").count();
     await page.screenshot({ path: `${SHOT_DIR}/t15-pending.png`, fullPage: true });
     record(`T15 pending 렌더 (${pendingName.slice(0,30)})`,
@@ -182,14 +182,14 @@ async function main() {
     role === 1 && listboxVisible && expanded === "true",
     `role=${role} listbox-visible=${listboxVisible} expanded=${expanded} (initial listbox=${hasListbox})`);
 
-  // T21 /sources 대시보드 (클라이언트 컴포넌트 — fetch 후 테이블 렌더 대기)
+  // T21 /sources 데이터 상태 (Phase 5 — meta.json 기반 정적 카드)
   const srcRes = await page.goto(`${BASE}/sources`, { waitUntil: "networkidle", timeout: 30_000 });
   const srcStatus = srcRes?.status() ?? 0;
   await page.waitForTimeout(1500);
   const srcBody = await page.textContent("body");
-  record("T21 /sources 대시보드",
-    srcStatus === 200 && (srcBody?.includes("regulation_sources") ?? false),
-    `HTTP ${srcStatus} + 테이블 렌더`);
+  record("T21 /sources 데이터 상태",
+    srcStatus === 200 && (srcBody?.includes("데이터 상태") ?? false) && (srcBody?.includes("ingredients") ?? false),
+    `HTTP ${srcStatus} + counts 카드 렌더`);
   await page.screenshot({ path: `${SHOT_DIR}/t21-sources.png`, fullPage: true });
 
   // T22 — Static export 이후 middleware 제거. 정적 사이트엔 /api/* 자체가 없으므로 N/A.

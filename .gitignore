@@ -48,3 +48,6 @@ next-env.d.ts
 
 # e2e
 .e2e-shots/
+
+# public/data/*.json 는 git 에 포함 — 사용자가 git clone + npm run build 만으로
+# Supabase 자격증명 없이 단독 구동 가능하도록.

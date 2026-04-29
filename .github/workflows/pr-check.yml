@@ -29,9 +29,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: static
+    # Phase 5: Supabase 자격증명 불필요 — public/data/*.json 가 repo 에 포함됨.
+    # E2E setup 에서 supabaseAdmin 호출하는 시나리오(T15 pending) 만 secrets 필요.
     env:
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       E2E_BASE: http://localhost:3010
     steps:
