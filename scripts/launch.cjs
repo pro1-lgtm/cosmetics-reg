@@ -46,6 +46,32 @@ function ensureInstalled() {
   }
 }
 
+// 자동 git pull — GitHub Actions 가 매일 갱신한 1차 소스 데이터를 사용자 PC 로 가져옴.
+// .git 없으면 (zip 다운로드 등) skip. --no-pull 플래그 또는 OFFLINE=1 환경변수로 끄기.
+function autoUpdate() {
+  if (!existsSync(".git")) return;
+  if (process.argv.includes("--no-pull") || process.env.OFFLINE === "1") return;
+  process.stdout.write("최신 데이터 확인... ");
+  const r = spawnSyncCmd("git", ["pull", "--ff-only", "--quiet"], { stdio: "pipe" });
+  if (r.status === 0) {
+    process.stdout.write("✓\n");
+    // out/ 도 stale — 데이터 변경 시 재빌드 필요
+    if (existsSync(path.join("out", "data", "meta.json"))) {
+      const fs = require("node:fs");
+      try {
+        const srcMeta = JSON.parse(fs.readFileSync(path.join("public", "data", "meta.json"), "utf8"));
+        const outMeta = JSON.parse(fs.readFileSync(path.join("out", "data", "meta.json"), "utf8"));
+        if (srcMeta.generated_at !== outMeta.generated_at) {
+          console.log("데이터 갱신 — 재빌드 필요");
+          fs.rmSync(path.join("out"), { recursive: true, force: true });
+        }
+      } catch {}
+    }
+  } else {
+    process.stdout.write("(skip — offline 또는 conflict)\n");
+  }
+}
+
 function ensureBuilt() {
   if (existsSync(path.join("out", "index.html"))) return;
   console.log("빌드 중 (~30초)...");
@@ -121,6 +147,7 @@ function waitReady() {
 
 async function main() {
   ensureInstalled();
+  autoUpdate();
   await ensureData();
   ensureBuilt();
 
