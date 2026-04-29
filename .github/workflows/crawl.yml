@@ -4,6 +4,10 @@ on:
   schedule:
     - cron: "17 18 * * *"   # 매일 KST 03:17
   workflow_dispatch:
+  # crawl.yml 자체 변경 시 즉시 1회 trigger (workflow_dispatch UI 가 push 직후 인식 지연되는 케이스 보완).
+  push:
+    branches: [main]
+    paths: ['.github/workflows/crawl.yml']
 
 # Phase 5b — Supabase 의존 0. 데이터 갱신 후 public/data/*.json 변경분을 git commit + push.
 # 정적 호스팅(또는 사용자 git pull)이 자동으로 새 데이터 반영.
