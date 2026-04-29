@@ -147,15 +147,25 @@ async function main() {
   console.log(`  text length: ${text.length}`);
 
   const app1 = getSection(text, "Appendix 1", "Appendix 2");
+  const app2 = getSection(text, "Appendix 2", "Appendix 3");
   const app3 = getSection(text, "Appendix 3", "Appendix 4");
   const app4 = getSection(text, "Appendix 4", "(*1)");
 
+  // Appendix 2 Section 1 (all types, 단순 single-amount) — "1. The ingredients restricted in all types"
+  // 다음 ~ "2. The ingredients restricted according to types" 직전.
+  const app2sec1 = (() => {
+    const a = app2.indexOf("1. The ingredients restricted in all types");
+    const b = app2.indexOf("2. The ingredients restricted according to types");
+    return a >= 0 && b > a ? app2.slice(a, b) : "";
+  })();
+
   const items: ParsedItem[] = [
     ...parseAppendix1(app1),
+    ...parseAmountTable(app2sec1, "JP MHLW 化粧品基準 別表 2 §1 (Appendix 2 §1 — restricted in all types)", "restricted"),
     ...parseAmountTable(app3, "JP MHLW 化粧品基準 別表 3 (Appendix 3 — preservatives positive list)", "listed"),
     ...parseAmountTable(app4, "JP MHLW 化粧品基準 別表 4 (Appendix 4 — UV absorbers positive list)", "listed"),
   ];
-  console.log(`  parsed: Appendix 1=${parseAppendix1(app1).length}, Appendix 3 (single)=${parseAmountTable(app3, "test", "listed").length}, Appendix 4 (single)=${parseAmountTable(app4, "test", "listed").length}, total ${items.length}`);
+  console.log(`  parsed: Appendix 1=${parseAppendix1(app1).length}, A2§1=${parseAmountTable(app2sec1, "test", "restricted").length}, A3=${parseAmountTable(app3, "test", "listed").length}, A4=${parseAmountTable(app4, "test", "listed").length}, total ${items.length}`);
 
   const ingredients = await readRows<IngredientRow>("ingredients");
   const byInciLower = new Map<string, IngredientRow>();

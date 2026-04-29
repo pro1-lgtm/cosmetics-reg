@@ -3,12 +3,28 @@ import { loadEnv } from "../crawlers/env";
 loadEnv();
 import { readRows, writeRows, updateMeta } from "../../lib/json-store";
 
-// 대만 TFDA — 화장품 방부제 제한표 (化粧品防腐劑成分使用限制表) 1차 소스 fetcher.
-// HTML 테이블 inline (페이징 1068&p=N). 정규식 파싱 — Gemini 불필요.
+// 대만 TFDA — 화장품 5 카테고리 1차 소스 fetcher.
+// consumer.fda.gov.tw/LAW/Cosmetic1.aspx?nodeID=1068&t=N (N=1,3,5,7,8).
+// HTML 테이블 inline → 정규식 파싱 (Gemini 불필요).
 
-const BASE = "https://consumer.fda.gov.tw/LAW/Cosmetic1.aspx?nodeID=1068";
-const SOURCE_DOC = "TFDA 化粧品防腐劑成分使用限制表";
-const SOURCE_URL = BASE;
+const BASE_DOC = "TFDA 化粧品禁限用成分管理規定";
+const SOURCE_URL = "https://consumer.fda.gov.tw/LAW/Cosmetic1.aspx?nodeID=1068";
+
+interface TwCategory {
+  t: number;
+  status: "banned" | "restricted" | "listed";
+  source_doc: string;
+  label_ko: string;
+  function_category: string | null;
+}
+
+const CATEGORIES: TwCategory[] = [
+  { t: 1, status: "banned",     source_doc: `${BASE_DOC} — 化粧品禁止使用成分表`,         label_ko: "TFDA 화장품 금지 성분", function_category: null },
+  { t: 3, status: "restricted", source_doc: `${BASE_DOC} — 化粧品防腐劑成分使用限制表`,    label_ko: "TFDA 화장품 방부제 사용 제한", function_category: "방부제" },
+  { t: 5, status: "listed",     source_doc: `${BASE_DOC} — 化粧品色素成分使用限制表`,      label_ko: "TFDA 화장품 색소 positive list", function_category: "색소" },
+  { t: 7, status: "restricted", source_doc: `${BASE_DOC} — 化粧品成分使用限制表`,         label_ko: "TFDA 화장품 일반 사용 제한", function_category: null },
+  { t: 8, status: "listed",     source_doc: `${BASE_DOC} — 化粧品防曬劑成分使用限制表`,    label_ko: "TFDA 화장품 자외선차단제 positive list", function_category: "자외선차단제" },
+];
 
 interface IngredientRow {
   id: string;
@@ -41,8 +57,8 @@ interface RegulationRow {
 }
 
 interface TwEntry {
-  no: string;       // 項次
-  inci: string;     // 成分名稱
+  no: string;
+  inci: string;
   cas: string | null;
   notes: string | null;
 }
@@ -51,29 +67,24 @@ function decodeEntities(s: string): string {
   return s
     .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
     .replace(/&#x([0-9a-fA-F]+);/g, (_, n) => String.fromCodePoint(parseInt(n, 16)))
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&nbsp;/g, " ");
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&nbsp;/g, " ");
 }
-
 function stripTags(s: string): string {
   return decodeEntities(s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
 }
 
-async function fetchPage(p: number): Promise<{ entries: TwEntry[]; totalPages: number }> {
-  const url = p === 1 ? BASE : `${BASE}&p=${p}`;
+async function fetchPage(t: number, p: number): Promise<{ entries: TwEntry[]; totalPages: number }> {
+  const url = p === 1
+    ? `https://consumer.fda.gov.tw/LAW/Cosmetic1.aspx?nodeID=1068&t=${t}`
+    : `https://consumer.fda.gov.tw/LAW/Cosmetic1.aspx?nodeID=1068&t=${t}&p=${p}`;
   const res = await fetch(url, {
     headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0.0.0", "Accept-Language": "zh-TW,zh;q=0.9" },
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status} for p=${p}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status} for t=${t} p=${p}`);
   const html = await res.text();
-  // "共有66頁" 또는 entity 화된 형태 모두 허용
-  const totalMatch = html.match(/共有\s*(\d+)\s*頁/) || html.match(/(\d+)\s*&#38913;/);
+  const totalMatch = html.match(/共有\s*(\d+)\s*頁/);
   const totalPages = totalMatch ? Number(totalMatch[1]) : 1;
   const entries: TwEntry[] = [];
-  // tbody 안 tr 만 (header 제외) — td 순서로 추출 (data-th attr 은 entity mix 라 미사용)
   const tbodyMatch = html.match(/<tbody>([\s\S]*?)<\/tbody>/);
   if (tbodyMatch) {
     const rowRe = /<tr>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<\/tr>/g;
@@ -83,100 +94,91 @@ async function fetchPage(p: number): Promise<{ entries: TwEntry[]; totalPages: n
       const inci = stripTags(m[2]);
       const cas = stripTags(m[3]) || null;
       const notes = stripTags(m[4]) || null;
-      // header row (項次/成分名稱) skip
-      if (!inci || inci === "成分名稱" || /^[一-鿿]+$/.test(inci) === false || inci.match(/[A-Za-z]/)) {
-        if (inci && /[A-Za-z]/.test(inci)) entries.push({ no, inci, cas, notes });
-      }
+      // header row 또는 한자 only skip
+      if (inci && /[A-Za-z]/.test(inci)) entries.push({ no, inci, cas, notes });
     }
   }
   return { entries, totalPages };
 }
 
+async function fetchCategory(cat: TwCategory): Promise<TwEntry[]> {
+  const all: TwEntry[] = [];
+  const first = await fetchPage(cat.t, 1);
+  all.push(...first.entries);
+  for (let p = 2; p <= first.totalPages; p++) {
+    const { entries } = await fetchPage(cat.t, p);
+    all.push(...entries);
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  console.log(`  t=${cat.t} (${cat.label_ko}): ${all.length} entries (${first.totalPages} pages)`);
+  return all;
+}
+
 async function main() {
   const startedAt = Date.now();
-  console.log(`▶ TW TFDA fetch (page 1)...`);
-  const first = await fetchPage(1);
-  console.log(`  page 1: ${first.entries.length} rows, totalPages=${first.totalPages}`);
-
-  const allEntries: TwEntry[] = [...first.entries];
-  for (let p = 2; p <= first.totalPages; p++) {
-    const { entries } = await fetchPage(p);
-    allEntries.push(...entries);
-    if (p % 10 === 0 || p === first.totalPages) console.log(`  page ${p}/${first.totalPages} (${allEntries.length} rows so far)`);
-    await new Promise((r) => setTimeout(r, 200)); // gentle
-  }
-  console.log(`  fetched ${allEntries.length} entries`);
-
-  // ingredient 매칭 + 신규 생성
   const ingredients = await readRows<IngredientRow>("ingredients");
   const byInciLower = new Map<string, IngredientRow>();
   for (const i of ingredients) byInciLower.set(i.inci_name.toLowerCase(), i);
 
   const now = new Date().toISOString();
   const sourceVersion = `TFDA-${now.slice(0, 10)}`;
+
+  // 1. 모든 TFDA 행 제거 (이전 잘못된 status 데이터 정리)
+  const existingRegs = await readRows<RegulationRow>("regulations");
+  const otherSources = existingRegs.filter((r) => !r.source_document.includes(BASE_DOC));
+  console.log(`▶ TFDA 5 카테고리 fetch (기존 TFDA rows ${existingRegs.length - otherSources.length} 삭제)`);
+
   const newRegs: RegulationRow[] = [];
-  let matched = 0, created = 0;
+  let totalMatched = 0, totalCreated = 0;
 
-  for (const e of allEntries) {
-    const key = e.inci.toLowerCase();
-    let ing = byInciLower.get(key);
-    if (!ing) {
-      ing = {
-        id: randomUUID(),
-        inci_name: e.inci,
-        korean_name: null,
-        chinese_name: null,
-        japanese_name: null,
-        cas_no: e.cas,
-        synonyms: [],
-        description: null,
-        function_category: "방부제",
-        function_description: null,
-      };
-      ingredients.push(ing);
-      byInciLower.set(key, ing);
-      created++;
-    } else {
-      matched++;
-      if (!ing.cas_no && e.cas) ing.cas_no = e.cas;
+  for (const cat of CATEGORIES) {
+    const entries = await fetchCategory(cat);
+    let matched = 0, created = 0;
+    for (const e of entries) {
+      const key = e.inci.toLowerCase();
+      let ing = byInciLower.get(key);
+      if (!ing) {
+        ing = {
+          id: randomUUID(),
+          inci_name: e.inci,
+          korean_name: null, chinese_name: null, japanese_name: null,
+          cas_no: e.cas, synonyms: [], description: null,
+          function_category: cat.function_category,
+          function_description: null,
+        };
+        ingredients.push(ing);
+        byInciLower.set(key, ing);
+        created++;
+      } else {
+        matched++;
+        if (!ing.cas_no && e.cas) ing.cas_no = e.cas;
+      }
+      const conds = [
+        `${cat.label_ko} 등재 — ${cat.status === "banned" ? "사용 금지" : cat.status === "listed" ? "사용 가능 (positive list)" : "사용 제한"}.`,
+        e.no ? `項次 ${e.no}` : null,
+        e.notes ? `비고 (備註 원문): ${e.notes}` : null,
+      ].filter(Boolean).join("\n\n");
+      newRegs.push({
+        ingredient_id: ing.id, country_code: "TW", status: cat.status,
+        max_concentration: null, concentration_unit: "%",
+        product_categories: cat.function_category ? [cat.function_category] : [],
+        conditions: conds, source_url: SOURCE_URL, source_document: cat.source_doc,
+        source_version: sourceVersion, source_priority: 100, last_verified_at: now,
+        confidence_score: 1.0, override_note: null,
+      });
     }
-
-    const conds = [
-      `TFDA 化粧品防腐劑成分使用限制表 등재 — 대만 화장품 방부제로 사용 시 제한 적용.`,
-      e.no ? `項次 ${e.no}` : null,
-      e.notes ? `비고 (備註 원문): ${e.notes}` : null,
-    ].filter(Boolean).join("\n\n");
-
-    newRegs.push({
-      ingredient_id: ing.id,
-      country_code: "TW",
-      status: "restricted",
-      max_concentration: null,
-      concentration_unit: "%",
-      product_categories: ["방부제"],
-      conditions: conds,
-      source_url: SOURCE_URL,
-      source_document: SOURCE_DOC,
-      source_version: sourceVersion,
-      source_priority: 100,
-      last_verified_at: now,
-      confidence_score: 1.0,
-      override_note: null,
-    });
+    totalMatched += matched; totalCreated += created;
+    console.log(`     → matched ${matched}, new ${created}`);
   }
 
-  console.log(`  matching: ${matched} matched, ${created} new`);
-
-  const existingRegs = await readRows<RegulationRow>("regulations");
-  const otherSources = existingRegs.filter((r) => r.source_document !== SOURCE_DOC);
   const finalRegs = [...otherSources, ...newRegs];
-
   await writeRows("ingredients", ingredients);
   await writeRows("regulations", finalRegs);
   await updateMeta({ ingredients: ingredients.length, regulations: finalRegs.length });
 
   console.log(`\n=== summary (${((Date.now()-startedAt)/1000).toFixed(1)}s) ===`);
-  console.log(`  TW TFDA preservative-restricted rows: ${newRegs.length} (priority 100)`);
+  console.log(`  TFDA total: ${newRegs.length} rows (priority 100)`);
+  console.log(`  matched ${totalMatched}, new ${totalCreated}`);
   console.log(`  ingredients: ${ingredients.length}, regulations: ${finalRegs.length}`);
 }
 
