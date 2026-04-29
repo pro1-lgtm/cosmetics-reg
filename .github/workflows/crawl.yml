@@ -81,6 +81,10 @@ jobs:
         run: npm run eu:pdf
         continue-on-error: true
 
+      - name: Parse EU EUR-Lex PDF (Annex II/III/IV/V/VI → regulations)
+        run: npm run eu:parse
+        continue-on-error: true
+
       - name: Try BR ANVISA cosmetics index
         run: npm run fetch:try -- BR "https://www.gov.br/anvisa/pt-br/assuntos/cosmeticos" br_anvisa_index
         continue-on-error: true
