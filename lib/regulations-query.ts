@@ -107,12 +107,13 @@ export async function lookupRegulation(
     const country = ds.countryByCode.get(code);
     if (!country) continue;
 
-    let row = regsForIngredient?.get(code);
+    // bucket 은 priority desc → last_verified desc 로 미리 정렬됨 — [0] 이 1차 우선.
+    let row = regsForIngredient?.get(code)?.[0];
 
     // 상속 fallback (예: VN inherits EU)
     let fromInherit: string | null = null;
     if (!row && country.inherits_from) {
-      row = regsForIngredient?.get(country.inherits_from);
+      row = regsForIngredient?.get(country.inherits_from)?.[0];
       if (row) fromInherit = country.inherits_from;
     }
 

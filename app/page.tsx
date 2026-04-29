@@ -377,7 +377,7 @@ function CountryCard({ result }: { result: CountryLookupResult }) {
               <summary className="cursor-pointer text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">
                 조건·비고 보기
               </summary>
-              <pre className="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed">{result.conditions}</pre>
+              <ConditionBlocks text={result.conditions} />
             </details>
           )}
           {result.source_document && (
@@ -397,6 +397,34 @@ function CountryCard({ result }: { result: CountryLookupResult }) {
 
       {result.source === "not_found" && <NotFoundByRegType result={result} />}
     </article>
+  );
+}
+
+function ConditionBlocks({ text }: { text: string }) {
+  // 단락 단위(\n\n)로 split. 각 단락 내부 줄바꿈은 whitespace-pre-line 로 보존하되
+  // 연속 공백은 압축. "[...]" 로 시작하는 단락은 경고 강조 (banned 일부 조건 등).
+  const blocks = text
+    .split(/\n{2,}/)
+    .map((b) => b.trim())
+    .filter(Boolean);
+  return (
+    <div className="mt-2 space-y-1.5 text-[11px] leading-relaxed">
+      {blocks.map((b, i) => {
+        const isWarning = /^\[/.test(b);
+        return (
+          <div
+            key={i}
+            className={
+              isWarning
+                ? "rounded border border-amber-300 bg-amber-50 px-2 py-1 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200 whitespace-pre-line"
+                : "whitespace-pre-line"
+            }
+          >
+            {b}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

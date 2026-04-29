@@ -59,9 +59,17 @@ interface RegulationRow {
   source_url: string | null;
   source_document: string;
   source_version: string | null;
+  source_priority: number;       // 100 = 자국 1차, 50 = 타국이 정리한 자료, 30 = AI 파싱
   last_verified_at: string;
   confidence_score: number;
   override_note: string | null;
+}
+
+// 자국 데이터(KR 행)는 MFDS 가 1차 소스라 priority 100.
+// 타국 데이터(EU/US/JP 등)는 MFDS 가 자체 정리한 자료라 priority 50 — 해당국 1차 소스
+// (CosIng/FDA/MHLW 등)이 들어오면 자동으로 우선됨.
+function mfdsSourcePriority(country_code: string): number {
+  return country_code === "KR" ? 100 : 50;
 }
 
 function parseSynonyms(raw: string | null | undefined): string[] {
@@ -132,12 +140,43 @@ function mergeRestrictionIngredients(map: Map<string, CanonicalIngredient>, rows
 function mapRegulateType(t: string, limitCond?: string | null, provis?: string | null): RegulationRow["status"] {
   const bannedRe = /금지|배합금지|ban|prohibit/i;
   const restrictedRe = /제한|배합한도|limit|restric|maximum|최대/i;
-  if (bannedRe.test(t)) return "banned";
-  if (restrictedRe.test(t)) return "restricted";
+  // "금지" 분류라도 LIMIT_COND/PROVIS_ATRCL 에 한정 키워드가 있으면 "조건부 사용 가능"
+  // (restricted) 로 재분류. 사용자가 conditions 의 단서 조항을 놓치지 않도록.
+  const conditionalRe = /단[,，\s]|다만|제외|except|only|에 한[하해]|할 수 있다|허용/i;
   const aux = `${limitCond ?? ""}\n${provis ?? ""}`;
-  if (bannedRe.test(aux)) return "banned";
+
+  if (bannedRe.test(t)) {
+    if (conditionalRe.test(aux)) return "restricted";
+    return "banned";
+  }
+  if (restrictedRe.test(t)) return "restricted";
+  if (bannedRe.test(aux)) {
+    if (conditionalRe.test(aux)) return "restricted";
+    return "banned";
+  }
   if (restrictedRe.test(aux)) return "restricted";
   return "unknown";
+}
+
+// conditions 정리 — trim, 빈 줄 압축, 중복 텍스트 제거.
+function normalizeConditionText(s: string): string {
+  return s
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .join("\n");
+}
+
+// 같은 ingredient×country 에 여러 row 가 머지될 때, 각 row 의 conditions 를
+// 별도 항목으로 누적 + 동일 텍스트 중복 방지.
+function appendCondition(existing: string | null, addition: string | null): string | null {
+  if (!addition) return existing;
+  const norm = normalizeConditionText(addition);
+  if (!norm) return existing;
+  if (!existing) return norm;
+  // 이미 동일 텍스트(또는 substring) 가 들어있으면 skip.
+  if (existing.includes(norm) || norm.includes(existing)) return existing;
+  return `${existing}\n\n${norm}`;
 }
 
 function buildRegulationsFromRestriction(
@@ -156,20 +195,39 @@ function buildRegulationsFromRestriction(
     const codes = mapCountryName(r.COUNTRY_NAME);
     if (codes.length === 0) continue;
     const status = mapRegulateType(r.REGULATE_TYPE, r.LIMIT_COND, r.PROVIS_ATRCL);
-    const conditionsParts = [r.LIMIT_COND, r.PROVIS_ATRCL].filter(Boolean);
-    const conditions = conditionsParts.length > 0 ? conditionsParts.join("\n\n") : null;
+    const conditionsParts = [r.LIMIT_COND, r.PROVIS_ATRCL]
+      .filter(Boolean)
+      .map((s) => normalizeConditionText(String(s)));
+    const conditions = conditionsParts.length > 0 ? conditionsParts.join("\n") : null;
+
     for (const code of codes) {
       const key = `${ingredient_id}:${code}`;
       const existing = merged.get(key);
       if (existing) {
-        const mergedStatus = existing.status === "banned" || status === "banned"
-          ? "banned"
-          : existing.status === "restricted" || status === "restricted"
-            ? "restricted"
-            : existing.status;
-        const mergedConds = [existing.conditions, conditions].filter(Boolean).join("\n---\n");
+        // 핵심: banned + restricted 조합은 단순 banned 가 아닌 restricted (조건부 허용)
+        // 가 더 정확. 사용자가 "특정 제품에서만 금지" 정보를 잃지 않도록 conditions 에 마킹.
+        const wasBan = existing.status === "banned";
+        const nowBan = status === "banned";
+        const wasRest = existing.status === "restricted";
+        const nowRest = status === "restricted";
+
+        let mergedStatus = existing.status;
+        let prefix: string | null = null;
+
+        if (wasBan && nowBan) {
+          mergedStatus = "banned";
+        } else if ((wasBan && nowRest) || (wasRest && nowBan)) {
+          mergedStatus = "restricted";
+          prefix = "[일부 제품·조건은 금지]";
+        } else if (wasRest || nowRest) {
+          mergedStatus = "restricted";
+        } else if (wasBan || nowBan) {
+          mergedStatus = "banned";
+        }
+
         existing.status = mergedStatus;
-        existing.conditions = mergedConds || null;
+        const tagged = prefix && conditions ? `${prefix}\n${conditions}` : conditions;
+        existing.conditions = appendCondition(existing.conditions, tagged);
       } else {
         merged.set(key, {
           ingredient_id,
@@ -182,6 +240,7 @@ function buildRegulationsFromRestriction(
           source_url: SOURCE_URL_BASE,
           source_document: SOURCE_DOC,
           source_version: sourceVersion,
+          source_priority: mfdsSourcePriority(code),
           last_verified_at: now,
           confidence_score: 0.95,
           override_note: null,
@@ -213,13 +272,12 @@ function enrichRegulationsWithDetail(regulations: RegulationRow[], details: Coun
     for (const code of codes) {
       const reg = regIndex.get(`${ingredient_id}:${code}`);
       if (reg) {
-        const detailParts = [d.LIMIT_COND, d.PROVIS_ATRCL].filter(Boolean);
+        const detailParts = [d.LIMIT_COND, d.PROVIS_ATRCL]
+          .filter(Boolean)
+          .map((s) => normalizeConditionText(String(s)));
         if (detailParts.length > 0) {
-          const detailText = detailParts.join("\n\n");
-          if (!reg.conditions) reg.conditions = detailText;
-          else if (!reg.conditions.includes(detailText.slice(0, 50))) {
-            reg.conditions = `${reg.conditions}\n---\n${detailText}`;
-          }
+          const detailText = detailParts.join("\n");
+          reg.conditions = appendCondition(reg.conditions, detailText);
         }
         matched++;
       }

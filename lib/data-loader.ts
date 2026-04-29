@@ -28,6 +28,7 @@ export interface Regulation {
   conditions: string | null;
   source_url: string | null;
   source_document: string | null;
+  source_priority: number | null;   // 100 = 자국 1차, 50 = 타국 정리, 30 = AI 파싱
   confidence_score: number | null;
   last_verified_at: string;
   override_note: string | null;
@@ -64,8 +65,8 @@ export interface Dataset {
   ingredientByInciLower: Map<string, Ingredient>;
   ingredientByKoreanLower: Map<string, Ingredient>;
   ingredientByCas: Map<string, Ingredient>;
-  // Regulation index: ingredient_id → country_code → row
-  regsByIngredientCountry: Map<string, Map<string, Regulation>>;
+  // Regulation index: ingredient_id → country_code → row[] (source 우선순위로 정렬됨)
+  regsByIngredientCountry: Map<string, Map<string, Regulation[]>>;
   countries: Country[];
   countryByCode: Map<string, Country>;
   // Quarantine: country_code → name_lower → row
@@ -111,14 +112,31 @@ async function loadDataset(): Promise<Dataset> {
     }
   }
 
-  const regsByIngredientCountry = new Map<string, Map<string, Regulation>>();
+  const regsByIngredientCountry = new Map<string, Map<string, Regulation[]>>();
   for (const r of regulations) {
     let inner = regsByIngredientCountry.get(r.ingredient_id);
     if (!inner) {
       inner = new Map();
       regsByIngredientCountry.set(r.ingredient_id, inner);
     }
-    inner.set(r.country_code, r);
+    let bucket = inner.get(r.country_code);
+    if (!bucket) {
+      bucket = [];
+      inner.set(r.country_code, bucket);
+    }
+    bucket.push(r);
+  }
+  // 각 bucket 정렬: source_priority desc → last_verified_at desc.
+  // lookup 시 [0] 이 1차 우선. 자국 1차 소스가 들어오면 자동으로 MFDS 위로 올라감.
+  for (const inner of regsByIngredientCountry.values()) {
+    for (const bucket of inner.values()) {
+      bucket.sort((a, b) => {
+        const pa = a.source_priority ?? 0;
+        const pb = b.source_priority ?? 0;
+        if (pa !== pb) return pb - pa;
+        return (b.last_verified_at ?? "").localeCompare(a.last_verified_at ?? "");
+      });
+    }
   }
 
   const countryByCode = new Map<string, Country>();
