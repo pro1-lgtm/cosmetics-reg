@@ -72,8 +72,9 @@ jobs:
         continue-on-error: true
 
       # 차단 사이트들의 메인 페이지 raw HTML 자동 저장 (분석 추후).
-      - name: Try EU EUR-Lex 1223/2009 consolidated
-        run: npm run fetch:try -- EU "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=CELEX:02009R1223-20240817" eu_eurlex_1223
+      # EU EUR-Lex — ELI URL 가 자동으로 최신 consolidated 로 redirect (CELEX 의 date 없으면 404)
+      - name: Try EU EUR-Lex 1223/2009 (ELI auto-redirect to latest)
+        run: npm run fetch:try -- EU "https://eur-lex.europa.eu/eli/reg/2009/1223/oj/eng" eu_eurlex_1223
         continue-on-error: true
 
       - name: Try BR ANVISA cosmetics index
