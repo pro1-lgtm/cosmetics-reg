@@ -57,6 +57,19 @@ export interface Meta {
   };
 }
 
+export interface KciaArticle {
+  no: string;
+  title: string;
+  category: string;
+  country_inferred: string | null;
+  date: string;
+  views: number;
+  attach_pdf: boolean;
+  attach_hwp: boolean;
+  attach_excel: boolean;
+  detail_url: string;
+}
+
 export interface Dataset {
   meta: Meta;
   ingredients: Ingredient[];
@@ -71,6 +84,8 @@ export interface Dataset {
   countryByCode: Map<string, Country>;
   // Quarantine: country_code → name_lower → row
   quarantineByCountryName: Map<string, Map<string, QuarantineRow>>;
+  // KCIA articles: country_code → article[] (보조 정보)
+  kciaByCountry: Map<string, KciaArticle[]>;
 }
 
 let cached: Promise<Dataset> | null = null;
@@ -82,12 +97,13 @@ async function fetchJson<T>(path: string): Promise<T> {
 }
 
 async function loadDataset(): Promise<Dataset> {
-  const [metaPayload, ingPayload, regPayload, ctyPayload, quarPayload] = await Promise.all([
+  const [metaPayload, ingPayload, regPayload, ctyPayload, quarPayload, kciaPayload] = await Promise.all([
     fetchJson<Meta>("/data/meta.json"),
     fetchJson<{ rows: Ingredient[] }>("/data/ingredients.json"),
     fetchJson<{ rows: Regulation[] }>("/data/regulations.json"),
     fetchJson<{ rows: Country[] }>("/data/countries.json"),
     fetchJson<{ rows: QuarantineRow[] }>("/data/quarantine.json"),
+    fetchJson<{ rows: KciaArticle[] }>("/data/kcia-articles.json").catch(() => ({ rows: [] })),
   ]);
 
   const ingredients = ingPayload.rows;
@@ -152,6 +168,19 @@ async function loadDataset(): Promise<Dataset> {
     inner.set(q.ingredient_name_raw.toLowerCase(), q);
   }
 
+  const kciaArticles = kciaPayload.rows;
+  const kciaByCountry = new Map<string, KciaArticle[]>();
+  for (const a of kciaArticles) {
+    if (!a.country_inferred) continue;
+    let bucket = kciaByCountry.get(a.country_inferred);
+    if (!bucket) { bucket = []; kciaByCountry.set(a.country_inferred, bucket); }
+    bucket.push(a);
+  }
+  // 각 country bucket 최신순 정렬
+  for (const bucket of kciaByCountry.values()) {
+    bucket.sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+  }
+
   return {
     meta: metaPayload,
     ingredients,
@@ -163,6 +192,7 @@ async function loadDataset(): Promise<Dataset> {
     countries,
     countryByCode,
     quarantineByCountryName,
+    kciaByCountry,
   };
 }
 

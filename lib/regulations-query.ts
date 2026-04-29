@@ -1,4 +1,4 @@
-import { dataset, type Ingredient } from "./data-loader";
+import { dataset, type Ingredient, type KciaArticle } from "./data-loader";
 
 // 인메모리 검색 — Phase 5: Supabase 의존 제거.
 // public/data/*.json (브라우저 ETag 자동 비교) 의 인덱스만 사용.
@@ -23,6 +23,7 @@ export interface CountryLookupResult {
   pending_reason?: string;
   inherits_from?: string | null;
   override_note?: string | null;
+  kcia_articles?: KciaArticle[];
 }
 
 export interface IngredientMatch {
@@ -117,6 +118,9 @@ export async function lookupRegulation(
       if (row) fromInherit = country.inherits_from;
     }
 
+    // KCIA 보조 자료 — country별 최근 5건만 전달 (협회 회원 자료 link)
+    const kciaArticles = ds.kciaByCountry.get(code)?.slice(0, 5);
+
     if (row) {
       results.push({
         country_code: code,
@@ -134,6 +138,7 @@ export async function lookupRegulation(
         last_verified_at: row.last_verified_at,
         inherits_from: fromInherit,
         override_note: row.override_note,
+        kcia_articles: kciaArticles,
       });
       continue;
     }
@@ -156,6 +161,7 @@ export async function lookupRegulation(
           regulation_type: country.regulation_type,
           source: "pending",
           pending_reason: pendingHit.rejection_reason ?? undefined,
+          kcia_articles: kciaArticles,
         });
         continue;
       }
@@ -166,6 +172,7 @@ export async function lookupRegulation(
       country_name_ko: country.name_ko,
       regulation_type: country.regulation_type,
       source: "not_found",
+      kcia_articles: kciaArticles,
     });
   }
 

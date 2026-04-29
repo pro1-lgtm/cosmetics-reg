@@ -43,6 +43,16 @@ jobs:
         run: npm run cn:iecic
         continue-on-error: true
 
+      - name: Refresh KCIA articles metadata (한국 협회)
+        run: npm run kcia:articles
+        continue-on-error: true
+
+      # GitHub Actions runner = 미국 IP. 한국 IP 차단된 정부 사이트 우회 시도.
+      # 실패해도 데이터 자체엔 영향 X (continue-on-error).
+      - name: Try CA Health Canada Hotlist (US-IP from runner)
+        run: npm run ca:hotlist
+        continue-on-error: true
+
       # 3) 보조 HTML 소스 hash diff → source-status.json + detected-changes.json + .crawl-raw/
       - name: Crawl HTML sources
         run: npm run crawl

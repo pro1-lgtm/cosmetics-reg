@@ -396,6 +396,32 @@ function CountryCard({ result }: { result: CountryLookupResult }) {
       )}
 
       {result.source === "not_found" && <NotFoundByRegType result={result} />}
+
+      {result.kcia_articles && result.kcia_articles.length > 0 && (
+        <details className="mt-3 text-[11px] text-zinc-600 dark:text-zinc-400">
+          <summary className="cursor-pointer text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">
+            관련 협회 자료 (KCIA) {result.kcia_articles.length}건
+          </summary>
+          <ul className="mt-1.5 space-y-1">
+            {result.kcia_articles.map((a) => (
+              <li key={a.no} className="flex items-baseline gap-1.5">
+                <span className="text-zinc-400 tabular-nums">{a.date}</span>
+                <a
+                  href={a.detail_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 text-zinc-700 underline decoration-dotted hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-50"
+                >
+                  {a.title}
+                </a>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1.5 text-[10px] text-zinc-400">
+            * 첨부 PDF 다운로드는 대한화장품협회 회원 로그인 필요
+          </p>
+        </details>
+      )}
     </article>
   );
 }
