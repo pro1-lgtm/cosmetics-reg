@@ -51,3 +51,7 @@ next-env.d.ts
 
 # public/data/*.json 는 git 에 포함 — 사용자가 git clone + npm run build 만으로
 # Supabase 자격증명 없이 단독 구동 가능하도록.
+
+# Portable Node.js (start.bat 가 자동 다운로드 — git 무관)
+node-portable/
+node-portable.zip
