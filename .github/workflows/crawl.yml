@@ -31,7 +31,12 @@ jobs:
       - name: Ingest MFDS public-data APIs
         run: npm run mfds:ingest
 
-      # 2) 보조 HTML 소스 hash diff → source-status.json + detected-changes.json + .crawl-raw/
+      # 2) 각국 1차 소스 (각 fetcher 는 in-place 머지 — 같은 source_document 행만 교체)
+      - name: Refresh US FDA 21 CFR 700 (eCFR API)
+        run: npm run us:ingest
+        continue-on-error: true
+
+      # 3) 보조 HTML 소스 hash diff → source-status.json + detected-changes.json + .crawl-raw/
       - name: Crawl HTML sources
         run: npm run crawl
         continue-on-error: true

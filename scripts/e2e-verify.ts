@@ -50,6 +50,8 @@ async function main() {
     for (const q of quars) {
       if (!q.ingredient_name_raw || !q.country_code) continue;
       if (q.status && q.status !== "pending") continue;
+      // 너무 긴 INCI (괄호 안 부가설명 등) 는 사용자가 실제 검색하지 않음 — skip
+      if (q.ingredient_name_raw.length > 50) continue;
       const ing = ingByLower.get(q.ingredient_name_raw.toLowerCase());
       if (!ing) continue;
       if (!regKey.has(`${ing.id}::${q.country_code}`)) return q.ingredient_name_raw;
