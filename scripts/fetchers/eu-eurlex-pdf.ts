@@ -27,11 +27,17 @@ interface SourcePdfRow {
   content_hash: string;
 }
 
+// EUR-Lex PDF URL 다수 시도 — 첫 번째 성공한 것만 유지.
 const SOURCES = [
   {
     key: "eu_eurlex_1223_consolidated_pdf",
-    title: "EU Cosmetic Products Regulation 1223/2009 (consolidated PDF, all Annexes)",
-    url: "https://eur-lex.europa.eu/eli/reg/2009/1223/oj/eng/pdfa1a",
+    title: "EU Cosmetic Products Regulation 1223/2009 (consolidated PDF)",
+    candidates: [
+      "https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=CELEX:02009R1223-20240817",
+      "https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=CELEX:02009R1223-20240817&from=EN",
+      "https://eur-lex.europa.eu/eli/reg/2009/1223/oj/eng/pdf",
+      "https://eur-lex.europa.eu/eli/reg/2009/1223/oj/eng/pdfa1a",
+    ],
     country: "EU",
     lang: "en",
   },
@@ -47,39 +53,48 @@ async function main() {
   for (const s of SOURCES) {
     const dest = join(RAW_DIR, `${s.key}.pdf`);
     const publicDest = join(PUBLIC_RAW_DIR, `${s.key}.pdf`);
-    console.log(`▶ ${s.country} ${s.key} ← ${s.url}`);
 
     const ctx = await launchContext({ acceptLang: "en-GB,en;q=0.9" });
+    let saved = false;
     try {
-      const res = await ctx.context.request.get(s.url, {
-        headers: { Accept: "application/pdf" },
-        timeout: 60_000,
-      });
-      if (!res.ok()) {
-        console.error(`  ✗ HTTP ${res.status()}`);
-        continue;
+      // EUR-Lex 의 PDF URL 가 redirect/202 인 경우 있어 페이지로 먼저 navigate (cookie 받기) 후 request
+      try {
+        await ctx.page.goto("https://eur-lex.europa.eu/", { waitUntil: "domcontentloaded", timeout: 30_000 });
+      } catch {}
+      for (const url of s.candidates) {
+        console.log(`▶ ${s.country} try: ${url}`);
+        try {
+          const res = await ctx.context.request.get(url, {
+            headers: { Accept: "application/pdf,application/octet-stream" },
+            timeout: 60_000,
+            maxRedirects: 5,
+          });
+          const buf = Buffer.from(await res.body());
+          const status = res.status();
+          const ct = res.headers()["content-type"] ?? "";
+          console.log(`  HTTP ${status}, ${buf.length}B, content-type=${ct}`);
+          // valid PDF: starts with %PDF-
+          if (res.ok() && buf.length > 1000 && buf.subarray(0, 5).toString() === "%PDF-") {
+            await writeFile(dest, buf);
+            await writeFile(publicDest, buf);
+            const hash = createHash("sha256").update(buf).digest("hex").slice(0, 16);
+            const row: SourcePdfRow = {
+              key: s.key, title: s.title, url, country: s.country, lang: s.lang,
+              file_path: dest, size_bytes: buf.length,
+              etag: res.headers()["etag"] ?? null,
+              last_modified_header: res.headers()["last-modified"] ?? null,
+              downloaded_at: new Date().toISOString(), content_hash: hash,
+            };
+            byKey.set(s.key, row);
+            console.log(`  ✓ saved ${buf.length} bytes hash=${hash}`);
+            saved = true;
+            break;
+          }
+        } catch (e) {
+          console.error(`  ✗ ${e instanceof Error ? e.message : e}`);
+        }
       }
-      const buf = Buffer.from(await res.body());
-      await writeFile(dest, buf);
-      await writeFile(publicDest, buf);
-      const hash = createHash("sha256").update(buf).digest("hex").slice(0, 16);
-      const row: SourcePdfRow = {
-        key: s.key,
-        title: s.title,
-        url: s.url,
-        country: s.country,
-        lang: s.lang,
-        file_path: dest,
-        size_bytes: buf.length,
-        etag: res.headers()["etag"] ?? null,
-        last_modified_header: res.headers()["last-modified"] ?? null,
-        downloaded_at: new Date().toISOString(),
-        content_hash: hash,
-      };
-      byKey.set(s.key, row);
-      console.log(`  ✓ ${buf.length} bytes hash=${hash}`);
-    } catch (e) {
-      console.error(`  ✗ ${e instanceof Error ? e.message : e}`);
+      if (!saved) console.error(`  ✗ all candidates failed for ${s.key}`);
     } finally {
       await ctx.close();
     }
