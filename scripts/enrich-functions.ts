@@ -4,8 +4,10 @@ loadEnv();
 import { GoogleGenAI } from "@google/genai";
 import { readRows, writeRows } from "../lib/json-store";
 
-// Phase 5b — Supabase 제거. ingredients.json 직접 read/update.
-// 매 50 건마다 progressive write — Gemini quota 소진 또는 중단 시 진행 보존.
+// Phase 5b — Supabase 제거. ingredients.json 에 chinese_name / japanese_name /
+// function_category / function_description 한 번 호출로 보강.
+// MFDS API 가 영문/한글만 주므로 중문·일문은 Gemini 가 채움.
+// 매 50 건마다 progressive write — quota 소진/중단 시 진행 보존.
 
 const CATEGORIES = [
   "보습제","미백","주름개선","자외선차단제","방부제","보존제","색소","향료",
@@ -16,6 +18,8 @@ const CATEGORIES = [
 const SCHEMA = {
   type: "object",
   properties: {
+    chinese_name: { type: "string", nullable: true, description: "Simplified Chinese name (CosIng/IECIC 형식)" },
+    japanese_name: { type: "string", nullable: true, description: "Japanese name (katakana, 化粧品基準 형식)" },
     function_category: { type: "string", enum: [...CATEGORIES], nullable: true },
     function_description: { type: "string", nullable: true },
   },
@@ -26,6 +30,8 @@ interface IngredientRow {
   id: string;
   inci_name: string;
   korean_name: string | null;
+  chinese_name: string | null;
+  japanese_name: string | null;
   function_category: string | null;
   function_description: string | null;
   [k: string]: unknown;
@@ -37,18 +43,22 @@ interface RegulationRow {
 }
 
 function prompt(inci: string, korean: string | null) {
-  return `화장품 원료: INCI "${inci}"${korean ? ` (한글: ${korean})` : ""}
+  return `화장품 원료 정보를 JSON 으로 알려주세요.
 
-이 원료의 **화장품 내 주된 기능**을 JSON으로 알려주세요.
+INCI: "${inci}"${korean ? `\n한글: ${korean}` : ""}
 
-- function_category: 아래 카테고리 중 하나를 고르세요. 해당 없으면 "기타", 정말 모르면 null.
+필드:
+- chinese_name: 중국 IECIC / NMPA 등록 시 사용되는 Simplified Chinese 명칭. 모르면 null.
+- japanese_name: 일본 化粧品基準·MHLW 등록 시 사용되는 일본어명 (보통 카타카나). 모르면 null.
+- function_category: 화장품 내 주된 기능. 한 카테고리만 선택. 해당 없으면 "기타", 정말 모르면 null.
   [${CATEGORIES.join(", ")}]
-- function_description: 12~30자 한국어로 이 원료의 역할·효능을 간결히 기술. 모르면 null.
+- function_description: 12~30자 한국어로 이 원료의 역할·효능 간결 기술. 모르면 null.
 
-**엄격한 규칙**:
-- 추측 금지. 확신 없으면 두 필드 모두 null.
+엄격한 규칙:
+- 추측 금지. 확신 없으면 null.
 - 일반적·검증 가능한 사실만. 의약품 주장 금지.
-- function_description은 한국어로만.`;
+- chinese_name 은 Simplified Chinese 만 (繁體 X). japanese_name 은 카타카나 또는 한자.
+- function_description 은 한국어로만.`;
 }
 
 function parseRetryDelayMs(errMsg: string): number | null {
@@ -59,11 +69,14 @@ function parseRetryDelayMs(errMsg: string): number | null {
   return null;
 }
 
-async function enrichOne(
-  ai: GoogleGenAI,
-  inci: string,
-  korean: string | null,
-): Promise<{ function_category: string | null; function_description: string | null }> {
+interface Enriched {
+  chinese_name: string | null;
+  japanese_name: string | null;
+  function_category: string | null;
+  function_description: string | null;
+}
+
+async function enrichOne(ai: GoogleGenAI, inci: string, korean: string | null): Promise<Enriched> {
   const maxAttempts = 4;
   let lastErr: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -80,6 +93,8 @@ async function enrichOne(
       const text = res.text ?? "{}";
       const parsed = JSON.parse(text);
       return {
+        chinese_name: parsed.chinese_name ?? null,
+        japanese_name: parsed.japanese_name ?? null,
         function_category: parsed.function_category ?? null,
         function_description: parsed.function_description ?? null,
       };
@@ -116,7 +131,11 @@ async function main() {
     .sort((a, b) => b[1] - a[1])
     .map(([id]) => id);
   const ordered = prioritizedIds.map((id) => byId.get(id)).filter(Boolean) as IngredientRow[];
-  const targets = (force ? ordered : ordered.filter((i) => !i.function_category)).slice(0, limit);
+  // 누락 필드 하나라도 있으면 보강 대상 (force 면 전부 재호출)
+  const targets = (force
+    ? ordered
+    : ordered.filter((i) => !i.chinese_name || !i.japanese_name || !i.function_category)
+  ).slice(0, limit);
 
   console.log(`대상 ${targets.length}건 (전체 규제 연결 ${ordered.length}건 중, limit=${limit}, force=${force})`);
 
@@ -134,16 +153,24 @@ async function main() {
     const ing = targets[idx];
     const startedAt = Date.now();
     try {
-      const enriched = await enrichOne(ai, ing.inci_name, ing.korean_name);
-      if (enriched.function_category || enriched.function_description) {
-        ing.function_category = enriched.function_category;
-        ing.function_description = enriched.function_description;
+      const e = await enrichOne(ai, ing.inci_name, ing.korean_name);
+      let updated = false;
+      if (!ing.chinese_name && e.chinese_name) { ing.chinese_name = e.chinese_name; updated = true; }
+      if (!ing.japanese_name && e.japanese_name) { ing.japanese_name = e.japanese_name; updated = true; }
+      if (!ing.function_category && e.function_category) { ing.function_category = e.function_category; updated = true; }
+      if (!ing.function_description && e.function_description) { ing.function_description = e.function_description; updated = true; }
+      if (updated) {
         dirty = true;
         okCount++;
         consecutive429 = 0;
-        console.log(`[${idx + 1}/${targets.length}] ✓ ${ing.inci_name} → ${enriched.function_category ?? "-"} | ${enriched.function_description ?? "-"}`);
+        const summary = [
+          e.chinese_name ? `中=${e.chinese_name}` : "",
+          e.japanese_name ? `日=${e.japanese_name}` : "",
+          e.function_category ? `cat=${e.function_category}` : "",
+        ].filter(Boolean).join(" / ");
+        console.log(`[${idx + 1}/${targets.length}] ✓ ${ing.inci_name} → ${summary || "(no data)"}`);
       } else {
-        console.log(`[${idx + 1}/${targets.length}] · ${ing.inci_name} → (no data)`);
+        console.log(`[${idx + 1}/${targets.length}] · ${ing.inci_name} (no new data)`);
       }
     } catch (e) {
       errCount++;

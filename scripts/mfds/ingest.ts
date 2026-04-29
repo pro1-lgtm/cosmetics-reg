@@ -158,13 +158,41 @@ function mapRegulateType(t: string, limitCond?: string | null, provis?: string |
   return "unknown";
 }
 
-// conditions 정리 — trim, 빈 줄 압축, 중복 텍스트 제거.
+// 한글 포함 여부.
+function hasKorean(s: string): boolean {
+  return /[가-힣]/.test(s);
+}
+
+// 영문/CJK 라인이 한글 번역과 병렬로 반복되는 패턴이 MFDS API 의 EU/JP/CN 데이터에 흔함.
+// 예: "* 【Restrictions】\n... \n* 【제한】\n..." 또는 "すべての化粧品(모든 화장품)".
+//
+// 휴리스틱: 한글 라인 비율이 25% 이상이면 한글 없는 라인 제거 (한글 번역으로 충분히 표현됨).
+// 한글 비율 낮으면 (= 한글 번역 누락) 그대로 — 정보 손실 방지.
+function preferKoreanLines(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const nonEmpty = lines.filter((l) => l.trim().length > 0);
+  if (nonEmpty.length === 0) return text;
+  const koreanCount = nonEmpty.filter(hasKorean).length;
+  const ratio = koreanCount / nonEmpty.length;
+  if (ratio < 0.25) return text; // 한글 번역이 거의 없음 — 원문 보존
+  return lines.filter((l) => l.trim().length === 0 || hasKorean(l)).join("\n");
+}
+
+// "原文(한글 번역)" 패턴에서 괄호 안 한글만 추출. 예: "すべての化粧品(모든 화장품)" → "모든 화장품".
+function extractKoreanFromParens(text: string): string {
+  return text.replace(/[一-龯ぁ-んァ-ヴa-zA-Z][^()]*\(([^()]*[가-힣][^()]*)\)/g, "$1");
+}
+
+// conditions 정리 — trim, 빈 줄 압축, 중복 텍스트 제거 + 영문/CJK 라인 정리.
 function normalizeConditionText(s: string): string {
-  return s
+  let text = s
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
     .join("\n");
+  text = extractKoreanFromParens(text);
+  text = preferKoreanLines(text);
+  return text;
 }
 
 // 같은 ingredient×country 에 여러 row 가 머지될 때, 각 row 의 conditions 를
