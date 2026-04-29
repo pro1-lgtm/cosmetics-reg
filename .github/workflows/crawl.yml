@@ -51,6 +51,10 @@ jobs:
         run: npm run jp:mhlw
         continue-on-error: true
 
+      - name: Refresh TW TFDA preservative-restricted list
+        run: npm run tw:tfda
+        continue-on-error: true
+
       # GitHub Actions runner = 미국 IP. 한국 IP 차단된 정부 사이트 우회 시도.
       # 실패해도 데이터 자체엔 영향 X (continue-on-error).
       - name: Try CA Health Canada Hotlist (US-IP from runner)
