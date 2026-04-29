@@ -3,46 +3,71 @@ loadEnv();
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { supabaseAdmin } from "../../lib/supabase-admin";
 import { extractWithModel } from "./extractor";
 import { consensusCheck } from "./consensus";
-import { applyOutcomes } from "./upsert";
+import { applyOutcomes, type RegulationRow, type QuarantineRow } from "./upsert";
+import type { IngredientLite } from "./ingredients";
+import { readRows, writeRows, updateMeta } from "../../lib/json-store";
+
+// Phase 5b — Supabase 제거. source-status.json 에서 ok/unchanged 행 순회 → .crawl-raw 파싱
+// → ingredients/regulations/quarantine in-memory 작업본 mutate → 마지막 한 번 write.
 
 const RAW_DIR = ".crawl-raw";
-// 무료 티어 호환: Flash + Flash-lite 듀얼 모델. Pro는 유료 필요.
 const PRIMARY_MODEL = "gemini-2.5-flash";
 const SECONDARY_MODEL = "gemini-2.5-flash-lite";
+
+interface SourceStatusRow {
+  country_code: string;
+  doc_key: string;
+  title: string;
+  source_url: string;
+  content_hash: string | null;
+  check_status: string | null;
+  last_parsed_hash: string | null;
+  last_parsed_at: string | null;
+  regulation_source_id: string | null;
+}
 
 async function main() {
   const args = process.argv.slice(2);
   const force = args.includes("--force");
   const filter = args.find((a) => !a.startsWith("--"))?.toUpperCase();
-  const supabase = supabaseAdmin();
 
-  let query = supabase
-    .from("source_documents")
-    .select("*")
-    .in("check_status", ["ok", "unchanged"])
-    .not("content_hash", "is", null);
-  if (filter) query = query.eq("country_code", filter);
-  const { data: docs, error } = await query;
-  if (error) throw error;
-  if (!docs || docs.length === 0) {
-    console.log("파싱할 문서가 없습니다 (check_status='ok' 인 source_documents 없음).");
+  const allStatus = await readRows<SourceStatusRow>("source-status");
+  let docs = allStatus.filter(
+    (d) => (d.check_status === "ok" || d.check_status === "unchanged") && d.content_hash,
+  );
+  if (filter) docs = docs.filter((d) => d.country_code === filter);
+
+  if (docs.length === 0) {
+    console.log("파싱할 문서가 없습니다 (source-status.json 에 ok/unchanged 행 없음).");
     return;
   }
 
+  // Load + index in-memory
+  const ingredients = await readRows<IngredientLite>("ingredients");
+  const regulations = await readRows<RegulationRow>("regulations");
+  const quarantine = await readRows<QuarantineRow>("quarantine");
+
+  const byInciLower = new Map<string, IngredientLite>();
+  const byCas = new Map<string, IngredientLite>();
+  for (const i of ingredients) {
+    byInciLower.set(i.inci_name.toLowerCase(), i);
+    if (i.cas_no) {
+      for (const cas of i.cas_no.split(/\s+/)) if (cas.trim()) byCas.set(cas.trim(), i);
+    }
+  }
+
+  let dirty = false;
+
   for (const doc of docs) {
     if (!force && doc.last_parsed_hash && doc.last_parsed_hash === doc.content_hash) {
-      console.log(`⊘ [${doc.country_code}] ${doc.doc_key} — already parsed (hash unchanged, use --force to reparse)`);
+      console.log(`⊘ [${doc.country_code}] ${doc.doc_key} — already parsed (use --force)`);
       continue;
     }
 
-    // Find raw file — extension is inferred from the crawler step
     const base = `${doc.country_code}_${doc.doc_key}`;
-    const candidates = [".html", ".pdf", ".csv", ".json", ".bin"].map((ext) =>
-      join(RAW_DIR, `${base}${ext}`),
-    );
+    const candidates = [".html", ".pdf", ".csv", ".json", ".bin"].map((ext) => join(RAW_DIR, `${base}${ext}`));
     const filePath = candidates.find((p) => existsSync(p));
     if (!filePath) {
       console.log(`⊘ [${doc.country_code}] ${doc.doc_key} — no raw file in ${RAW_DIR}/`);
@@ -52,55 +77,52 @@ async function main() {
     console.log(`▶ [${doc.country_code}] ${doc.doc_key} (${filePath})`);
     try {
       const [primaryResults, secondaryResults] = await Promise.all([
-        extractWithModel({
-          model: PRIMARY_MODEL,
-          filePath,
-          country: doc.country_code,
-          title: doc.title,
-          url: doc.source_url,
-        }),
-        extractWithModel({
-          model: SECONDARY_MODEL,
-          filePath,
-          country: doc.country_code,
-          title: doc.title,
-          url: doc.source_url,
-        }),
+        extractWithModel({ model: PRIMARY_MODEL, filePath, country: doc.country_code, title: doc.title, url: doc.source_url }),
+        extractWithModel({ model: SECONDARY_MODEL, filePath, country: doc.country_code, title: doc.title, url: doc.source_url }),
       ]);
-
-      console.log(
-        `  ${PRIMARY_MODEL}: ${primaryResults.length}, ${SECONDARY_MODEL}: ${secondaryResults.length}`,
-      );
+      console.log(`  ${PRIMARY_MODEL}: ${primaryResults.length}, ${SECONDARY_MODEL}: ${secondaryResults.length}`);
 
       const outcomes = consensusCheck(primaryResults, secondaryResults);
-      const stats = await applyOutcomes(
+      const stats = applyOutcomes(
         {
-          supabase,
           country_code: doc.country_code,
           source_url: doc.source_url,
           source_document: doc.title,
-          source_document_id: doc.id,
+          source_document_id: doc.regulation_source_id ?? "unknown",
+          ingredients,
+          byInciLower,
+          byCas,
+          regulations,
+          quarantine,
         },
         outcomes,
       );
-
       console.log(`  → ${JSON.stringify(stats)}`);
+      dirty = true;
 
-      await supabase
-        .from("source_documents")
-        .update({
-          last_parsed_hash: doc.content_hash,
-          last_parsed_at: new Date().toISOString(),
-        })
-        .eq("id", doc.id);
+      // mark parsed
+      const idx = allStatus.findIndex((s) => s.country_code === doc.country_code && s.doc_key === doc.doc_key);
+      if (idx >= 0) {
+        allStatus[idx].last_parsed_hash = doc.content_hash;
+        allStatus[idx].last_parsed_at = new Date().toISOString();
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`  ✗ parse failed: ${msg}`);
     }
   }
+
+  if (dirty) {
+    await writeRows("ingredients", ingredients);
+    await writeRows("regulations", regulations);
+    await writeRows("quarantine", quarantine);
+    await writeRows("source-status", allStatus);
+    await updateMeta({
+      ingredients: ingredients.length,
+      regulations: regulations.length,
+      quarantine_pending: quarantine.filter((q) => q.status === "pending").length,
+    });
+  }
 }
 
-main().catch((e) => {
-  console.error("Fatal:", e);
-  process.exit(1);
-});
+main().catch((e) => { console.error("Fatal:", e); process.exit(1); });

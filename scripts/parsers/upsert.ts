@@ -1,14 +1,50 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { randomUUID } from "node:crypto";
 import type { ExtractedRegulation } from "./schema";
-import { findOrCreateIngredient } from "./ingredients";
+import { findOrCreateIngredient, type IngredientLite } from "./ingredients";
 import { isOutlier, type ConsensusOutcome } from "./consensus";
 
+// Phase 5b — Supabase 제거. 호출자가 미리 ingredients/regulations/quarantine 의
+// in-memory 작업본 + 인덱스를 넘기고, applyOutcomes 가 mutate 후 caller 가 write.
+
 export interface UpsertContext {
-  supabase: SupabaseClient;
   country_code: string;
   source_url: string;
   source_document: string;
   source_document_id: string;
+  ingredients: IngredientLite[];
+  byInciLower: Map<string, IngredientLite>;
+  byCas: Map<string, IngredientLite>;
+  regulations: RegulationRow[];
+  quarantine: QuarantineRow[];
+}
+
+export interface RegulationRow {
+  ingredient_id: string;
+  country_code: string;
+  status: string;
+  max_concentration: number | null;
+  concentration_unit: string | null;
+  product_categories: string[];
+  conditions: string | null;
+  source_url: string | null;
+  source_document: string;
+  source_version: string | null;
+  last_verified_at: string;
+  confidence_score: number;
+  override_note: string | null;
+}
+
+export interface QuarantineRow {
+  id: string;
+  ingredient_name_raw: string;
+  country_code: string;
+  proposed_data: ExtractedRegulation;
+  confidence_score: number;
+  flash_result: ExtractedRegulation | null;
+  pro_result: ExtractedRegulation | null;
+  rejection_reason: string;
+  source_document_id: string;
+  status: "pending" | "approved" | "rejected";
 }
 
 export interface UpsertStats {
@@ -18,17 +54,13 @@ export interface UpsertStats {
   skipped: number;
 }
 
-export async function applyOutcomes(
-  ctx: UpsertContext,
-  outcomes: ConsensusOutcome[],
-): Promise<UpsertStats> {
+export function applyOutcomes(ctx: UpsertContext, outcomes: ConsensusOutcome[]): UpsertStats {
   const stats: UpsertStats = { inserted: 0, updated: 0, quarantined: 0, skipped: 0 };
 
   for (const outcome of outcomes) {
     if (outcome.kind === "disagreed") {
-      // Create ingredient so users can still find it (result will be "pending")
-      await findOrCreateIngredient(ctx.supabase, outcome.flash);
-      await quarantine(ctx, {
+      findOrCreateIngredient(ctx.ingredients, ctx.byInciLower, ctx.byCas, outcome.flash);
+      addQuarantine(ctx, {
         raw_name: outcome.flash.inci_name,
         proposed: outcome.flash,
         flash: outcome.flash,
@@ -42,8 +74,8 @@ export async function applyOutcomes(
 
     if (outcome.kind === "flash_only" || outcome.kind === "pro_only") {
       const reg = outcome.kind === "flash_only" ? outcome.flash : outcome.pro;
-      await findOrCreateIngredient(ctx.supabase, reg);
-      await quarantine(ctx, {
+      findOrCreateIngredient(ctx.ingredients, ctx.byInciLower, ctx.byCas, reg);
+      addQuarantine(ctx, {
         raw_name: reg.inci_name,
         proposed: reg,
         flash: outcome.kind === "flash_only" ? reg : null,
@@ -55,26 +87,17 @@ export async function applyOutcomes(
       continue;
     }
 
-    // agreed — outlier check vs existing DB value
     const reg = outcome.merged;
-    const ingredient_id = await findOrCreateIngredient(ctx.supabase, reg);
+    const ingredient_id = findOrCreateIngredient(ctx.ingredients, ctx.byInciLower, ctx.byCas, reg);
 
-    // maybeSingle은 동일 조합 2건+ 존재 시 error → insert 분기로 빠져 누적되는 버그 원인.
-    // order + limit(1) 로 최신 1건만. 여러 건은 migration 0006 partial unique + promote.ts로 정리.
-    const existingRows = await ctx.supabase
-      .from("regulations")
-      .select("id, max_concentration")
-      .eq("ingredient_id", ingredient_id)
-      .eq("country_code", ctx.country_code)
-      .is("valid_to", null)
-      .order("last_verified_at", { ascending: false })
-      .limit(1);
-    const existing = existingRows.data?.[0] ?? null;
+    const existing = ctx.regulations.find(
+      (r) => r.ingredient_id === ingredient_id && r.country_code === ctx.country_code,
+    );
 
     if (existing) {
-      const out = isOutlier(reg.max_concentration, existing.max_concentration as number | null);
+      const out = isOutlier(reg.max_concentration, existing.max_concentration);
       if (out.outlier) {
-        await quarantine(ctx, {
+        addQuarantine(ctx, {
           raw_name: reg.inci_name,
           proposed: reg,
           flash: reg,
@@ -87,7 +110,7 @@ export async function applyOutcomes(
       }
     }
 
-    const row = {
+    const row: RegulationRow = {
       ingredient_id,
       country_code: ctx.country_code,
       status: reg.status,
@@ -97,16 +120,17 @@ export async function applyOutcomes(
       conditions: reg.conditions,
       source_url: ctx.source_url,
       source_document: ctx.source_document,
+      source_version: null,
       last_verified_at: new Date().toISOString(),
-      auto_verified: true,
       confidence_score: outcome.confidence,
+      override_note: null,
     };
 
     if (existing) {
-      await ctx.supabase.from("regulations").update(row).eq("id", existing.id);
+      Object.assign(existing, row);
       stats.updated++;
     } else {
-      await ctx.supabase.from("regulations").insert(row);
+      ctx.regulations.push(row);
       stats.inserted++;
     }
   }
@@ -114,7 +138,7 @@ export async function applyOutcomes(
   return stats;
 }
 
-async function quarantine(
+function addQuarantine(
   ctx: UpsertContext,
   q: {
     raw_name: string;
@@ -125,7 +149,8 @@ async function quarantine(
     confidence: number;
   },
 ) {
-  await ctx.supabase.from("regulation_quarantine").insert({
+  ctx.quarantine.push({
+    id: randomUUID(),
     ingredient_name_raw: q.raw_name,
     country_code: ctx.country_code,
     proposed_data: q.proposed,

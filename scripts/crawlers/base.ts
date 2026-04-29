@@ -1,72 +1,126 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { supabaseAdmin } from "../../lib/supabase-admin";
 import { sha256 } from "./hash";
-import type { CrawlerSource, CrawlOutcome } from "./types";
+import type { CrawlOutcome } from "./types";
+import { readRows, writeRows } from "../../lib/json-store";
+
+// Phase 5b — Supabase 제거. JSON 기반 변경 감지.
+// source-status.json 가 source_documents 대응, detected-changes.json 가 audit log,
+// regulation-sources.json 의 last_checked/consecutive_failures 갱신.
 
 const RAW_DIR = ".crawl-raw";
 
-export interface CrawlerSourceWithRegistry extends CrawlerSource {
-  regulation_source_id?: string | null;
+interface SourceStatusRow {
+  country_code: string;
+  doc_key: string;
+  title: string;
+  source_url: string;
+  content_hash: string | null;
+  last_checked_at: string | null;
+  last_changed_at: string | null;
+  check_status: string | null;
+  notes: string | null;
+  regulation_source_id: string | null;
 }
 
-/**
- * 문서 1개를 fetch → sha256 해시 비교 → 변경 감지 시 source_documents upsert +
- * detected_changes 이벤트 insert + 원본 파일 저장. 실패 시 regulation_sources의
- * consecutive_failures를 카운트업.
- *
- * registry 기반 호출(regulation_source_id 포함) 과 기존 allSources 호환 모두 지원.
- */
+interface DetectedChangeRow {
+  id: string;
+  regulation_source_id: string | null;
+  country_code: string;
+  detected_at: string;
+  change_type: string;
+  old_hash: string | null;
+  new_hash: string | null;
+  diff_summary: string | null;
+  review_status: "pending" | "approved" | "rejected" | "promoted";
+}
+
+interface RegulationSourceRow {
+  id: string;
+  country_code: string;
+  name: string;
+  url: string;
+  detect_method: string;
+  active: boolean;
+  last_checked_at: string | null;
+  last_changed_at: string | null;
+  content_hash: string | null;
+  check_status: string | null;
+  last_error: string | null;
+  consecutive_failures: number;
+  [k: string]: unknown;
+}
+
+export interface CrawlerSourceWithRegistry {
+  country_code: string;
+  doc_key: string;
+  title: string;
+  source_url: string;
+  regulation_source_id: string | null;
+  fetch: () => Promise<{ url: string; content: Buffer; contentType: string; extension: string }>;
+}
+
+async function updateRegSource(
+  reg_id: string,
+  patch: Partial<RegulationSourceRow>,
+): Promise<void> {
+  const all = await readRows<RegulationSourceRow>("regulation-sources");
+  const idx = all.findIndex((r) => r.id === reg_id);
+  if (idx < 0) return;
+  all[idx] = { ...all[idx], ...patch };
+  await writeRows("regulation-sources", all);
+}
+
+async function upsertSourceStatus(row: SourceStatusRow): Promise<void> {
+  const all = await readRows<SourceStatusRow>("source-status");
+  const idx = all.findIndex((r) => r.country_code === row.country_code && r.doc_key === row.doc_key);
+  if (idx >= 0) all[idx] = { ...all[idx], ...row };
+  else all.push(row);
+  await writeRows("source-status", all);
+}
+
+async function appendDetectedChange(row: DetectedChangeRow): Promise<void> {
+  const all = await readRows<DetectedChangeRow>("detected-changes");
+  all.push(row);
+  await writeRows("detected-changes", all);
+}
+
 export async function runCrawler(source: CrawlerSourceWithRegistry): Promise<CrawlOutcome> {
   const now = new Date().toISOString();
-  const supabase = supabaseAdmin();
 
   try {
     const fetched = await source.fetch();
     const hash = sha256(fetched.content);
 
-    const { data: existing } = await supabase
-      .from("source_documents")
-      .select("id, content_hash")
-      .eq("country_code", source.country_code)
-      .eq("doc_key", source.doc_key)
-      .maybeSingle();
-
-    const prevHash = (existing?.content_hash as string | null) ?? null;
+    const allStatus = await readRows<SourceStatusRow>("source-status");
+    const existing = allStatus.find(
+      (r) => r.country_code === source.country_code && r.doc_key === source.doc_key,
+    );
+    const prevHash = existing?.content_hash ?? null;
     const changed = prevHash !== hash;
 
     if (changed) {
       await mkdir(RAW_DIR, { recursive: true });
-      const rawPath = join(
-        RAW_DIR,
-        `${source.country_code}_${source.doc_key}${fetched.extension}`,
-      );
+      const rawPath = join(RAW_DIR, `${source.country_code}_${source.doc_key}${fetched.extension}`);
       await writeFile(rawPath, fetched.content);
 
-      const { data: upserted } = await supabase
-        .from("source_documents")
-        .upsert(
-          {
-            country_code: source.country_code,
-            doc_key: source.doc_key,
-            title: source.title,
-            source_url: source.source_url,
-            content_hash: hash,
-            last_checked_at: now,
-            last_changed_at: now,
-            check_status: "ok",
-            notes: null,
-            regulation_source_id: source.regulation_source_id ?? null,
-          },
-          { onConflict: "country_code,doc_key" },
-        )
-        .select("id")
-        .maybeSingle();
+      await upsertSourceStatus({
+        country_code: source.country_code,
+        doc_key: source.doc_key,
+        title: source.title,
+        source_url: source.source_url,
+        content_hash: hash,
+        last_checked_at: now,
+        last_changed_at: now,
+        check_status: "ok",
+        notes: null,
+        regulation_source_id: source.regulation_source_id,
+      });
 
-      // 변경 감지 이벤트 — 감사 로그 겸 검수 대기열. review_status=pending.
-      await supabase.from("detected_changes").insert({
-        regulation_source_id: source.regulation_source_id ?? null,
-        source_document_id: (upserted?.id as string | null) ?? (existing?.id as string | null) ?? null,
+      await appendDetectedChange({
+        id: randomUUID(),
+        regulation_source_id: source.regulation_source_id,
         country_code: source.country_code,
         detected_at: now,
         change_type: prevHash === null ? "new_document" : "content_changed",
@@ -78,108 +132,86 @@ export async function runCrawler(source: CrawlerSourceWithRegistry): Promise<Cra
         review_status: "pending",
       });
 
-      // registry 통계 갱신
       if (source.regulation_source_id) {
-        await supabase
-          .from("regulation_sources")
-          .update({
-            last_checked_at: now,
-            last_changed_at: now,
-            content_hash: hash,
-            check_status: "changed",
-            last_error: null,
-            consecutive_failures: 0,
-          })
-          .eq("id", source.regulation_source_id);
-      }
-
-      return {
-        country_code: source.country_code,
-        doc_key: source.doc_key,
-        status: "changed",
-        content_hash: hash,
-        content_path: rawPath,
-      };
-    }
-
-    // 변경 없음
-    await supabase
-      .from("source_documents")
-      .update({ last_checked_at: now, check_status: "unchanged" })
-      .eq("country_code", source.country_code)
-      .eq("doc_key", source.doc_key);
-
-    if (source.regulation_source_id) {
-      await supabase
-        .from("regulation_sources")
-        .update({
+        await updateRegSource(source.regulation_source_id, {
           last_checked_at: now,
-          check_status: "ok",
+          last_changed_at: now,
+          content_hash: hash,
+          check_status: "changed",
           last_error: null,
           consecutive_failures: 0,
-        })
-        .eq("id", source.regulation_source_id);
+        });
+      }
+
+      return { country_code: source.country_code, doc_key: source.doc_key, status: "changed", content_hash: hash, content_path: rawPath };
     }
 
-    return {
+    await upsertSourceStatus({
       country_code: source.country_code,
       doc_key: source.doc_key,
-      status: "unchanged",
+      title: source.title,
+      source_url: source.source_url,
       content_hash: hash,
-    };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    await supabase.from("source_documents").upsert(
-      {
-        country_code: source.country_code,
-        doc_key: source.doc_key,
-        title: source.title,
-        source_url: source.source_url,
-        last_checked_at: now,
-        check_status: "failed",
-        notes: msg.slice(0, 500),
-        regulation_source_id: source.regulation_source_id ?? null,
-      },
-      { onConflict: "country_code,doc_key" },
-    );
+      last_checked_at: now,
+      last_changed_at: existing?.last_changed_at ?? null,
+      check_status: "unchanged",
+      notes: null,
+      regulation_source_id: source.regulation_source_id,
+    });
 
     if (source.regulation_source_id) {
-      // consecutive_failures 증가는 원자적이지 않지만 단일 워커 cron에서 충분.
-      const { data: cur } = await supabase
-        .from("regulation_sources")
-        .select("consecutive_failures")
-        .eq("id", source.regulation_source_id)
-        .maybeSingle();
-      const n = ((cur?.consecutive_failures as number | null) ?? 0) + 1;
-      await supabase
-        .from("regulation_sources")
-        .update({
-          last_checked_at: now,
-          check_status: "failed",
-          last_error: msg.slice(0, 500),
-          consecutive_failures: n,
-        })
-        .eq("id", source.regulation_source_id);
+      await updateRegSource(source.regulation_source_id, {
+        last_checked_at: now,
+        check_status: "ok",
+        last_error: null,
+        consecutive_failures: 0,
+      });
+    }
 
-      // 5회+ 연속 실패 시 source_unavailable 이벤트 기록
+    return { country_code: source.country_code, doc_key: source.doc_key, status: "unchanged", content_hash: hash };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+
+    await upsertSourceStatus({
+      country_code: source.country_code,
+      doc_key: source.doc_key,
+      title: source.title,
+      source_url: source.source_url,
+      content_hash: null,
+      last_checked_at: now,
+      last_changed_at: null,
+      check_status: "failed",
+      notes: msg.slice(0, 500),
+      regulation_source_id: source.regulation_source_id,
+    });
+
+    if (source.regulation_source_id) {
+      const all = await readRows<RegulationSourceRow>("regulation-sources");
+      const cur = all.find((r) => r.id === source.regulation_source_id);
+      const n = (cur?.consecutive_failures ?? 0) + 1;
+      await updateRegSource(source.regulation_source_id, {
+        last_checked_at: now,
+        check_status: "failed",
+        last_error: msg.slice(0, 500),
+        consecutive_failures: n,
+      });
+
       if (n === 5 || n === 10 || n === 20) {
-        await supabase.from("detected_changes").insert({
+        await appendDetectedChange({
+          id: randomUUID(),
           regulation_source_id: source.regulation_source_id,
           country_code: source.country_code,
           detected_at: now,
           change_type: "source_unavailable",
+          old_hash: null,
+          new_hash: null,
           diff_summary: `${n}회 연속 실패: ${msg.slice(0, 100)}`,
           review_status: "pending",
         });
       }
     }
 
-    return {
-      country_code: source.country_code,
-      doc_key: source.doc_key,
-      status: "failed",
-      error: msg,
-    };
+    return { country_code: source.country_code, doc_key: source.doc_key, status: "failed", error: msg };
   }
 }
 
@@ -193,7 +225,6 @@ export async function fetchUrl(
   try {
     res = await fetch(url, {
       headers: {
-        // 봇 차단 회피: 일반 브라우저 UA로 위장. NMPA 412 방지.
         "User-Agent": opts.userAgent ??
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -208,16 +239,11 @@ export async function fetchUrl(
   if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} for ${url}`);
   const buf = Buffer.from(await res.arrayBuffer());
   const ct = res.headers.get("content-type") ?? "application/octet-stream";
-  const ext =
-    opts.expectedExt ??
-    (ct.includes("pdf")
-      ? ".pdf"
-      : ct.includes("csv")
-        ? ".csv"
-        : ct.includes("json")
-          ? ".json"
-          : ct.includes("html")
-            ? ".html"
-            : ".bin");
+  const ext = opts.expectedExt ??
+    (ct.includes("pdf") ? ".pdf"
+      : ct.includes("csv") ? ".csv"
+      : ct.includes("json") ? ".json"
+      : ct.includes("html") ? ".html"
+      : ".bin");
   return { content: buf, contentType: ct, extension: ext, url };
 }

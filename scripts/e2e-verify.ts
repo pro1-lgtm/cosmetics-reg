@@ -2,7 +2,11 @@ import { chromium, type Page } from "playwright";
 import { mkdir } from "node:fs/promises";
 import { loadEnv } from "./crawlers/env";
 loadEnv();
-import { supabaseAdmin } from "../lib/supabase-admin";
+import { readRows } from "../lib/json-store";
+
+interface QuarRow { ingredient_name_raw: string | null; country_code: string | null; status?: string }
+interface IngRow { id: string; inci_name: string }
+interface RegRow { ingredient_id: string; country_code: string }
 
 // BASE는 E2E_BASE 환경변수 또는 기본 prod URL. localhost 정적 검증 시 E2E_BASE=http://localhost:3010.
 const BASE = process.env.E2E_BASE ?? "https://cosmetics-reg-tim10000.netlify.app";
@@ -33,19 +37,22 @@ async function search(page: Page, q: string) {
 async function main() {
   await mkdir(SHOT_DIR, { recursive: true });
 
-  // pending 상태 테스트: quarantine에 있고 regulations_active에 없는 (ingredient, country) 조합 탐색.
-  // regulations가 있으면 lookupRegulation이 verified 반환하고 quarantine 무시 (의도된 동작).
-  const s = supabaseAdmin();
+  // pending 상태 테스트: quarantine 에 있고 regulations 에 없는 (ingredient, country) 조합.
+  // 모든 데이터는 public/data/*.json (Phase 5b — Supabase 의존 0).
   async function findPendingOnly(): Promise<string> {
-    const quars = await s.from("regulation_quarantine").select("ingredient_name_raw, country_code").eq("status", "pending");
-    for (const q of (quars.data ?? [])) {
-      const name = q.ingredient_name_raw as string | null;
-      const cc = q.country_code as string | null;
-      if (!name || !cc) continue;
-      const ing = await s.from("ingredients").select("id").ilike("inci_name", name).maybeSingle();
-      if (!ing.data) continue;
-      const reg = await s.from("regulations_active").select("id", { count: "exact", head: true }).eq("ingredient_id", ing.data.id).eq("country_code", cc);
-      if ((reg.count ?? 0) === 0) return name;
+    const quars = await readRows<QuarRow>("quarantine");
+    const ings = await readRows<IngRow>("ingredients");
+    const regs = await readRows<RegRow>("regulations");
+    const ingByLower = new Map<string, IngRow>();
+    for (const i of ings) ingByLower.set(i.inci_name.toLowerCase(), i);
+    const regKey = new Set<string>();
+    for (const r of regs) regKey.add(`${r.ingredient_id}::${r.country_code}`);
+    for (const q of quars) {
+      if (!q.ingredient_name_raw || !q.country_code) continue;
+      if (q.status && q.status !== "pending") continue;
+      const ing = ingByLower.get(q.ingredient_name_raw.toLowerCase());
+      if (!ing) continue;
+      if (!regKey.has(`${ing.id}::${q.country_code}`)) return q.ingredient_name_raw;
     }
     return "";
   }

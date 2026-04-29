@@ -2,30 +2,15 @@ import { loadEnv } from "./crawlers/env";
 loadEnv();
 
 import { GoogleGenAI } from "@google/genai";
-import { supabaseAdmin } from "../lib/supabase-admin";
+import { readRows, writeRows } from "../lib/json-store";
 
-// Allowed function categories. Gemini must pick ONE (or null) from this set.
+// Phase 5b — Supabase 제거. ingredients.json 직접 read/update.
+// 매 50 건마다 progressive write — Gemini quota 소진 또는 중단 시 진행 보존.
+
 const CATEGORIES = [
-  "보습제",
-  "미백",
-  "주름개선",
-  "자외선차단제",
-  "방부제",
-  "보존제",
-  "색소",
-  "향료",
-  "계면활성제",
-  "유화제",
-  "점증제",
-  "항산화제",
-  "각질제거",
-  "세정제",
-  "pH조절제",
-  "킬레이트제",
-  "완화제",
-  "수렴제",
-  "항균제",
-  "기타",
+  "보습제","미백","주름개선","자외선차단제","방부제","보존제","색소","향료",
+  "계면활성제","유화제","점증제","항산화제","각질제거","세정제","pH조절제",
+  "킬레이트제","완화제","수렴제","항균제","기타",
 ] as const;
 
 const SCHEMA = {
@@ -36,6 +21,20 @@ const SCHEMA = {
   },
   required: [],
 } as const;
+
+interface IngredientRow {
+  id: string;
+  inci_name: string;
+  korean_name: string | null;
+  function_category: string | null;
+  function_description: string | null;
+  [k: string]: unknown;
+}
+
+interface RegulationRow {
+  ingredient_id: string;
+  [k: string]: unknown;
+}
 
 function prompt(inci: string, korean: string | null) {
   return `화장품 원료: INCI "${inci}"${korean ? ` (한글: ${korean})` : ""}
@@ -53,10 +52,8 @@ function prompt(inci: string, korean: string | null) {
 }
 
 function parseRetryDelayMs(errMsg: string): number | null {
-  // Gemini format 1: "Please retry in 21.544384736s."
   const m1 = errMsg.match(/retry in (\d+(?:\.\d+)?)s/i);
   if (m1) return Math.ceil(Number(m1[1]) * 1000);
-  // Gemini format 2: "retryDelay":"22s"
   const m2 = errMsg.match(/"retryDelay":"(\d+(?:\.\d+)?)s"/);
   if (m2) return Math.ceil(Number(m2[1]) * 1000);
   return null;
@@ -91,121 +88,88 @@ async function enrichOne(
       const msg = e instanceof Error ? e.message : String(e);
       const retryable = /503|UNAVAILABLE|RESOURCE_EXHAUSTED|429|ECONNRESET|ETIMEDOUT/i.test(msg);
       if (!retryable || attempt === maxAttempts) throw e;
-      // Honor server's retry_delay on 429; fallback to exponential backoff on 503
       const serverDelay = parseRetryDelayMs(msg);
       const waitMs = serverDelay ?? 2_000 * 2 ** (attempt - 1);
-      console.warn(
-        `  retry ${attempt}/${maxAttempts - 1} after ${Math.round(waitMs / 1000)}s${serverDelay ? " (server)" : ""} — ${msg.slice(0, 60)}`,
-      );
-      await new Promise((r) => setTimeout(r, waitMs + 500)); // small buffer
+      console.warn(`  retry ${attempt} after ${Math.round(waitMs / 1000)}s — ${msg.slice(0, 60)}`);
+      await new Promise((r) => setTimeout(r, waitMs + 500));
     }
   }
   throw lastErr;
 }
 
 async function main() {
-  const supabase = supabaseAdmin();
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-
   const force = process.argv.includes("--force");
   const limitArg = process.argv.find((a) => a.startsWith("--limit="));
   const limit = limitArg ? Number(limitArg.split("=")[1]) : 200;
 
-  // Priority: ingredients with regulations, most-regulated first.
-  const { data: regCounts, error: regErr } = await supabase
-    .from("regulations")
-    .select("ingredient_id");
-  if (regErr) throw regErr;
+  const ingredients = await readRows<IngredientRow>("ingredients");
+  const regs = await readRows<RegulationRow>("regulations");
 
   const countByIng = new Map<string, number>();
-  (regCounts ?? []).forEach((r) => {
-    const id = r.ingredient_id as string;
-    countByIng.set(id, (countByIng.get(id) ?? 0) + 1);
-  });
+  for (const r of regs) countByIng.set(r.ingredient_id, (countByIng.get(r.ingredient_id) ?? 0) + 1);
+
+  const byId = new Map<string, IngredientRow>();
+  for (const i of ingredients) byId.set(i.id, i);
 
   const prioritizedIds = Array.from(countByIng.entries())
     .sort((a, b) => b[1] - a[1])
     .map(([id]) => id);
+  const ordered = prioritizedIds.map((id) => byId.get(id)).filter(Boolean) as IngredientRow[];
+  const targets = (force ? ordered : ordered.filter((i) => !i.function_category)).slice(0, limit);
 
-  const { data: ingredients, error } = await supabase
-    .from("ingredients")
-    .select("id, inci_name, korean_name, function_category, function_description")
-    .in("id", prioritizedIds);
-  if (error) throw error;
-  if (!ingredients) return;
+  console.log(`대상 ${targets.length}건 (전체 규제 연결 ${ordered.length}건 중, limit=${limit}, force=${force})`);
 
-  const byId = new Map<string, (typeof ingredients)[number]>();
-  ingredients.forEach((i) => byId.set(i.id as string, i));
-
-  const ordered = prioritizedIds.map((id) => byId.get(id)).filter(Boolean) as typeof ingredients;
-
-  const targets = (force
-    ? ordered
-    : ordered.filter((i) => !(i.function_category as string | null))
-  ).slice(0, limit);
-
-  console.log(
-    `대상 원료 ${targets.length}건 (전체 규제 연결 ${ordered.length}건 중, limit=${limit}, force=${force})`,
-  );
-
-  // Gemini Flash 무료 tier: 20 RPM (에러 메시지상 실측). 3s = 20 RPM 한계치.
-  // 재시도 여유 + 안전 버퍼 고려해 6s.
   const MIN_INTERVAL_MS = 6_000;
-  let okCount = 0;
-  let errCount = 0;
-  let consecutive429 = 0;
+  let okCount = 0, errCount = 0, consecutive429 = 0;
+  let dirty = false;
+
+  async function flush() {
+    if (!dirty) return;
+    await writeRows("ingredients", ingredients);
+    dirty = false;
+  }
 
   for (let idx = 0; idx < targets.length; idx++) {
     const ing = targets[idx];
-    const inci = ing.inci_name as string;
-    const korean = (ing.korean_name as string | null) ?? null;
     const startedAt = Date.now();
     try {
-      const enriched = await enrichOne(ai, inci, korean);
+      const enriched = await enrichOne(ai, ing.inci_name, ing.korean_name);
       if (enriched.function_category || enriched.function_description) {
-        await supabase
-          .from("ingredients")
-          .update({
-            function_category: enriched.function_category,
-            function_description: enriched.function_description,
-          })
-          .eq("id", ing.id);
+        ing.function_category = enriched.function_category;
+        ing.function_description = enriched.function_description;
+        dirty = true;
         okCount++;
         consecutive429 = 0;
-        console.log(
-          `[${idx + 1}/${targets.length}] ✓ ${inci} → ${enriched.function_category ?? "-"} | ${enriched.function_description ?? "-"}`,
-        );
+        console.log(`[${idx + 1}/${targets.length}] ✓ ${ing.inci_name} → ${enriched.function_category ?? "-"} | ${enriched.function_description ?? "-"}`);
       } else {
-        console.log(`[${idx + 1}/${targets.length}] · ${inci} → (no data, skipped)`);
+        console.log(`[${idx + 1}/${targets.length}] · ${ing.inci_name} → (no data)`);
       }
     } catch (e) {
       errCount++;
       const msg = e instanceof Error ? e.message : String(e);
-      console.error(`[${idx + 1}/${targets.length}] ✗ ${inci}: ${msg.slice(0, 150)}`);
+      console.error(`[${idx + 1}/${targets.length}] ✗ ${ing.inci_name}: ${msg.slice(0, 150)}`);
       if (/429|RESOURCE_EXHAUSTED/i.test(msg)) {
         consecutive429++;
         if (consecutive429 >= 5) {
-          console.error(
-            `연속 429 ${consecutive429}회 — 일일 quota 소진 가능성. 중단. 내일 다시 실행.`,
-          );
+          console.error(`연속 429 ${consecutive429}회 — 일일 quota 소진 가능성. 중단.`);
           break;
         }
-      } else {
-        consecutive429 = 0;
-      }
+      } else consecutive429 = 0;
+    }
+
+    if ((idx + 1) % 50 === 0) {
+      await flush();
+      console.log(`  · checkpoint write @ ${idx + 1}`);
     }
 
     const elapsed = Date.now() - startedAt;
     const wait = Math.max(0, MIN_INTERVAL_MS - elapsed);
-    if (idx < targets.length - 1 && wait > 0) {
-      await new Promise((r) => setTimeout(r, wait));
-    }
+    if (idx < targets.length - 1 && wait > 0) await new Promise((r) => setTimeout(r, wait));
   }
 
+  await flush();
   console.log(`완료: 성공 ${okCount} / 실패 ${errCount} / 대상 ${targets.length}`);
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+main().catch((e) => { console.error(e); process.exit(1); });

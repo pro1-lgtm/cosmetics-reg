@@ -1,18 +1,21 @@
-name: Daily Crawl
+name: Daily Data Refresh
 
 on:
   schedule:
-    - cron: "17 18 * * *"   # 매일 KST 03:17 (UTC 18:17) — 새벽 트래픽 적은 시간
+    - cron: "17 18 * * *"   # 매일 KST 03:17
   workflow_dispatch:
 
+# Phase 5b — Supabase 의존 0. 데이터 갱신 후 public/data/*.json 변경분을 git commit + push.
+# 정적 호스팅(또는 사용자 git pull)이 자동으로 새 데이터 반영.
+
+permissions:
+  contents: write
+
 jobs:
-  crawl:
+  refresh:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
-      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       MFDS_API_KEY: ${{ secrets.MFDS_API_KEY }}
       CI: "true"
@@ -24,19 +27,34 @@ jobs:
           cache: "npm"
       - run: npm ci
 
-      # 주 데이터 소스 — 식약처 공공데이터 API (4종) 전량 재수집
+      # 1) MFDS 공공데이터 4종 → public/data/{ingredients,regulations,countries,meta}.json
       - name: Ingest MFDS public-data APIs
         run: npm run mfds:ingest
 
-      # 보조 소스 — HTML 크롤러 (US FDA 등). 해시 비교로 변경 감지만, 파싱은 다음 step에서
+      # 2) 보조 HTML 소스 hash diff → source-status.json + detected-changes.json + .crawl-raw/
       - name: Crawl HTML sources
         run: npm run crawl
+        continue-on-error: true
 
-      # Gemini 듀얼 파싱 — 변경된 HTML만 (last_parsed_hash 스킵 로직)
+      # 3) Gemini 듀얼 파싱 (변경된 raw 만) → regulations.json + quarantine.json
       - name: Parse changed HTML sources
         run: npm run parse
+        continue-on-error: true
 
-      - name: Upload raw snapshots
+      # 4) 변경분 commit + push
+      - name: Commit data changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/data/
+          if git diff --cached --quiet; then
+            echo "no data changes"
+            exit 0
+          fi
+          git commit -m "chore(data): daily refresh $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push
+
+      - name: Upload raw snapshots (for audit)
         if: always()
         uses: actions/upload-artifact@v4
         with:

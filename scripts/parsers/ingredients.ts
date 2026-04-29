@@ -1,57 +1,59 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { randomUUID } from "node:crypto";
 import type { ExtractedRegulation } from "./schema";
 
-export async function findOrCreateIngredient(
-  supabase: SupabaseClient,
+// Phase 5b — JSON 기반. ingredients.json 의 in-memory 작업본을 받아 검색·신규 생성.
+// caller 가 마지막에 한 번 writeRows("ingredients", ...) 로 영속화.
+
+export interface IngredientLite {
+  id: string;
+  inci_name: string;
+  korean_name: string | null;
+  chinese_name: string | null;
+  japanese_name: string | null;
+  cas_no: string | null;
+  synonyms: string[];
+  description: string | null;
+  function_category: string | null;
+  function_description: string | null;
+}
+
+export function findOrCreateIngredient(
+  ingredients: IngredientLite[],
+  byInciLower: Map<string, IngredientLite>,
+  byCas: Map<string, IngredientLite>,
   reg: ExtractedRegulation,
-): Promise<string> {
+): string {
   const inci = reg.inci_name.trim();
-  const cas = reg.cas_no?.trim();
+  const lower = inci.toLowerCase();
+  const cas = reg.cas_no?.trim() || null;
 
-  // 1) INCI exact match (case-insensitive)
-  {
-    const { data } = await supabase
-      .from("ingredients")
-      .select("id")
-      .ilike("inci_name", inci)
-      .maybeSingle();
-    if (data?.id) return data.id;
-  }
+  const exact = byInciLower.get(lower);
+  if (exact) return exact.id;
 
-  // 2) CAS match
   if (cas) {
-    const { data } = await supabase
-      .from("ingredients")
-      .select("id")
-      .eq("cas_no", cas)
-      .maybeSingle();
-    if (data?.id) return data.id;
+    const byC = byCas.get(cas);
+    if (byC) return byC.id;
   }
 
-  // 3) Synonyms array contains — 동일 synonym이 여러 원료에 들어있을 수 있으니
-  // maybeSingle 금지 (2건+ 매치 시 PostgREST가 error 반환). limit(1)로 첫 건 사용.
-  {
-    const { data } = await supabase
-      .from("ingredients")
-      .select("id")
-      .contains("synonyms", [inci])
-      .limit(1);
-    if (data?.[0]?.id) return data[0].id;
+  for (const ing of ingredients) {
+    if (ing.synonyms.some((s) => s.toLowerCase() === lower)) return ing.id;
   }
 
-  // 4) Create new
-  const { data, error } = await supabase
-    .from("ingredients")
-    .insert({
-      inci_name: inci,
-      korean_name: reg.korean_name,
-      chinese_name: reg.chinese_name,
-      japanese_name: reg.japanese_name,
-      cas_no: cas ?? null,
-      synonyms: reg.synonyms,
-    })
-    .select("id")
-    .single();
-  if (error) throw new Error(`Failed to create ingredient ${inci}: ${error.message}`);
-  return data.id;
+  const id = randomUUID();
+  const created: IngredientLite = {
+    id,
+    inci_name: inci,
+    korean_name: reg.korean_name,
+    chinese_name: reg.chinese_name,
+    japanese_name: reg.japanese_name,
+    cas_no: cas,
+    synonyms: reg.synonyms ?? [],
+    description: null,
+    function_category: null,
+    function_description: null,
+  };
+  ingredients.push(created);
+  byInciLower.set(lower, created);
+  if (cas) byCas.set(cas, created);
+  return id;
 }

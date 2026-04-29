@@ -1,7 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { loadEnv } from "../crawlers/env";
 loadEnv();
 
-import { supabaseAdmin } from "../../lib/supabase-admin";
 import { fetchAllPages } from "./client";
 import { mapCountryName, getUnknownCountries } from "./country-mapping";
 import type {
@@ -9,11 +9,14 @@ import type {
   UseRestrictionItem,
   CountryDetailItem,
 } from "./types";
+import { readRows, writeRows, updateMeta } from "../../lib/json-store";
+
+// Phase 5b — Supabase 제거. 식약처 API → public/data/*.json 직접 머지.
+// 기존 ingredients 의 function_category / function_description / 다국어명 보존.
+// regulations 는 source_document='MFDS 공공데이터 API' 행만 교체 (다른 source 보존).
 
 const SOURCE_DOC = "MFDS 공공데이터 API";
 const SOURCE_URL_BASE = "https://www.data.go.kr/data";
-const MFDS_DOC_KEY = "kr_mfds_public_data_api";
-const MFDS_SOURCE_NAME = "MFDS 공공데이터 API updatedAt"; // registry.ts와 일치
 
 interface CanonicalIngredient {
   inci_name: string;
@@ -25,13 +28,44 @@ interface CanonicalIngredient {
   description: string | null;
 }
 
-// ============================================================
-// Stage 1: Pull + build canonical ingredient records (memory)
-// ============================================================
+interface IngredientRow {
+  id: string;
+  inci_name: string;
+  korean_name: string | null;
+  chinese_name: string | null;
+  japanese_name: string | null;
+  cas_no: string | null;
+  synonyms: string[];
+  description: string | null;
+  function_category: string | null;
+  function_description: string | null;
+}
+
+interface CountryRow {
+  code: string;
+  name_ko: string;
+  inherits_from: string | null;
+  regulation_type: string;
+}
+
+interface RegulationRow {
+  ingredient_id: string;
+  country_code: string;
+  status: string;
+  max_concentration: number | null;
+  concentration_unit: string;
+  product_categories: string[];
+  conditions: string | null;
+  source_url: string | null;
+  source_document: string;
+  source_version: string | null;
+  last_verified_at: string;
+  confidence_score: number;
+  override_note: string | null;
+}
+
 function parseSynonyms(raw: string | null | undefined): string[] {
   if (!raw) return [];
-  // Split on semicolon, newline, slash, or **comma-followed-by-space** only.
-  // Plain commas without space are kept (chemical names like "2,4,5-Trimethyl..." contain them).
   return raw
     .split(/[;\n\r/]|,\s+/)
     .map((s) => s.trim())
@@ -44,18 +78,12 @@ function normalizeInci(s: string | null | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-async function stage1IngredientMaster(
-  ing: IngredientMasterItem[],
-): Promise<Map<string, CanonicalIngredient>> {
+function stage1IngredientMaster(ing: IngredientMasterItem[]): Map<string, CanonicalIngredient> {
   const byInci = new Map<string, CanonicalIngredient>();
   let skippedNoEng = 0;
-
   for (const row of ing) {
     const inci = normalizeInci(row.INGR_ENG_NAME);
-    if (!inci) {
-      skippedNoEng++;
-      continue;
-    }
+    if (!inci) { skippedNoEng++; continue; }
     const korean = normalizeInci(row.INGR_KOR_NAME);
     const existing = byInci.get(inci);
     const synonyms = parseSynonyms(row.INGR_SYNONYM);
@@ -69,24 +97,15 @@ async function stage1IngredientMaster(
       description: existing?.description ?? row.ORIGIN_MAJOR_KOR_NAME,
     });
   }
-
-  console.log(
-    `  master: 21K raw → ${byInci.size} unique INCI (skipped ${skippedNoEng} rows without INGR_ENG_NAME)`,
-  );
+  console.log(`  master: ${ing.length} raw → ${byInci.size} unique INCI (skipped ${skippedNoEng})`);
   return byInci;
 }
 
-function mergeRestrictionIngredients(
-  map: Map<string, CanonicalIngredient>,
-  rows: UseRestrictionItem[],
-) {
+function mergeRestrictionIngredients(map: Map<string, CanonicalIngredient>, rows: UseRestrictionItem[]) {
   let skippedNoEng = 0;
   for (const r of rows) {
     const inci = normalizeInci(r.INGR_ENG_NAME);
-    if (!inci) {
-      skippedNoEng++;
-      continue;
-    }
+    if (!inci) { skippedNoEng++; continue; }
     const existing = map.get(inci);
     const synonyms = parseSynonyms(r.INGR_SYNONYM);
     const korean = normalizeInci(r.INGR_STD_NAME);
@@ -107,71 +126,9 @@ function mergeRestrictionIngredients(
       });
     }
   }
-  if (skippedNoEng) {
-    console.log(`    (restriction rows without INGR_ENG_NAME: ${skippedNoEng} skipped)`);
-  }
+  if (skippedNoEng) console.log(`    (restriction skipped ${skippedNoEng})`);
 }
 
-// ============================================================
-// Stage 2: Bulk upsert ingredients to DB, return id map
-// ============================================================
-async function upsertIngredients(
-  supabase: ReturnType<typeof supabaseAdmin>,
-  ingredients: CanonicalIngredient[],
-): Promise<Map<string, string>> {
-  const BATCH = 500;
-  const idMap = new Map<string, string>();
-
-  for (let i = 0; i < ingredients.length; i += BATCH) {
-    const slice = ingredients.slice(i, i + BATCH);
-    const { data, error } = await supabase
-      .from("ingredients")
-      .upsert(
-        slice.map((r) => ({
-          inci_name: r.inci_name,
-          korean_name: r.korean_name,
-          chinese_name: r.chinese_name,
-          japanese_name: r.japanese_name,
-          cas_no: r.cas_no,
-          synonyms: r.synonyms,
-          description: r.description,
-        })),
-        { onConflict: "inci_name" },
-      )
-      .select("id, inci_name");
-    if (error) throw new Error(`Ingredient upsert batch ${i}: ${error.message}`);
-    for (const row of data ?? []) {
-      idMap.set(row.inci_name as string, row.id as string);
-    }
-    console.log(`    upserted ${Math.min(i + BATCH, ingredients.length)}/${ingredients.length}`);
-  }
-
-  return idMap;
-}
-
-// ============================================================
-// Stage 3: Build regulations (deduped per ingredient×country)
-// ============================================================
-interface RegulationRow {
-  ingredient_id: string;
-  country_code: string;
-  status: "banned" | "restricted" | "allowed" | "listed" | "not_listed" | "unknown";
-  max_concentration: number | null;
-  concentration_unit: string;
-  product_categories: string[];
-  conditions: string | null;
-  source_url: string;
-  source_document: string;
-  source_document_id: string | null; // migration 0005 FK
-  source_version: string | null;
-  last_verified_at: string;
-  auto_verified: boolean;
-  confidence_score: number;
-}
-
-// MFDS REGULATE_TYPE은 "금지" | "제한" 외의 값도 포함 (영어/다국어/빈 문자열).
-// 키워드 미매칭 시 LIMIT_COND·PROVIS_ATRCL 텍스트로 보조 판별: 배합한도·최대농도·limit 등이
-// 있으면 사실상 restricted. 이 로직 없으면 9K+ 행이 부당하게 "unknown"으로 분류됨.
 function mapRegulateType(t: string, limitCond?: string | null, provis?: string | null): RegulationRow["status"] {
   const bannedRe = /금지|배합금지|ban|prohibit/i;
   const restrictedRe = /제한|배합한도|limit|restric|maximum|최대/i;
@@ -185,43 +142,31 @@ function mapRegulateType(t: string, limitCond?: string | null, provis?: string |
 
 function buildRegulationsFromRestriction(
   rows: UseRestrictionItem[],
-  idMap: Map<string, string>,
-  sourceDocId: string | null,
-  sourceVersion: string | null,
+  idByInci: Map<string, string>,
+  sourceVersion: string,
 ): RegulationRow[] {
   const merged = new Map<string, RegulationRow>();
   const now = new Date().toISOString();
   let skipped = 0;
-
   for (const r of rows) {
     const inci = normalizeInci(r.INGR_ENG_NAME);
-    if (!inci) {
-      skipped++;
-      continue;
-    }
-    const ingredient_id = idMap.get(inci);
-    if (!ingredient_id) {
-      skipped++;
-      continue;
-    }
+    if (!inci) { skipped++; continue; }
+    const ingredient_id = idByInci.get(inci);
+    if (!ingredient_id) { skipped++; continue; }
     const codes = mapCountryName(r.COUNTRY_NAME);
     if (codes.length === 0) continue;
     const status = mapRegulateType(r.REGULATE_TYPE, r.LIMIT_COND, r.PROVIS_ATRCL);
     const conditionsParts = [r.LIMIT_COND, r.PROVIS_ATRCL].filter(Boolean);
     const conditions = conditionsParts.length > 0 ? conditionsParts.join("\n\n") : null;
-
     for (const code of codes) {
       const key = `${ingredient_id}:${code}`;
       const existing = merged.get(key);
-      // If multiple rows for same ingredient×country (e.g. 아세안 covers 6 countries),
-      // prefer "banned" over "restricted", and concatenate conditions.
       if (existing) {
-        const mergedStatus =
-          existing.status === "banned" || status === "banned"
-            ? "banned"
-            : existing.status === "restricted" || status === "restricted"
-              ? "restricted"
-              : existing.status;
+        const mergedStatus = existing.status === "banned" || status === "banned"
+          ? "banned"
+          : existing.status === "restricted" || status === "restricted"
+            ? "restricted"
+            : existing.status;
         const mergedConds = [existing.conditions, conditions].filter(Boolean).join("\n---\n");
         existing.status = mergedStatus;
         existing.conditions = mergedConds || null;
@@ -236,64 +181,43 @@ function buildRegulationsFromRestriction(
           conditions,
           source_url: SOURCE_URL_BASE,
           source_document: SOURCE_DOC,
-          source_document_id: sourceDocId,
           source_version: sourceVersion,
           last_verified_at: now,
-          auto_verified: true,
-          confidence_score: 0.95, // MFDS 공식 API → 모델 파싱보다 신뢰도 높게
+          confidence_score: 0.95,
+          override_note: null,
         });
       }
     }
   }
-
-  if (skipped) console.log(`    (regulation skipped ${skipped} rows: missing INCI or id)`);
+  if (skipped) console.log(`    (regulation skipped ${skipped})`);
   return Array.from(merged.values());
 }
 
-// ============================================================
-// Stage 4: Enrich regulations with getCsmtcsUseRstrcNatnInfoService (LIMIT_COND bilingual detail)
-// ============================================================
-function enrichRegulationsWithDetail(
-  regulations: RegulationRow[],
-  details: CountryDetailItem[],
-  idMap: Map<string, string>,
-) {
-  // detail rows are keyed by NOTICE_INGR_NAME. We need to match by ingredient english name — imperfect.
-  // For now, match by extracting English portion of NOTICE_INGR_NAME and map to idMap.
+function enrichRegulationsWithDetail(regulations: RegulationRow[], details: CountryDetailItem[], idByInci: Map<string, string>) {
   const regIndex = new Map<string, RegulationRow>();
   for (const r of regulations) regIndex.set(`${r.ingredient_id}:${r.country_code}`, r);
-
-  let matched = 0;
-  let unmatched = 0;
-
+  let matched = 0, unmatched = 0;
   for (const d of details) {
     if (!d.NOTICE_INGR_NAME) continue;
     const possibleInci = d.NOTICE_INGR_NAME.split(/[;,\n]/)[0].trim();
     const codes = mapCountryName(d.COUNTRY_NAME);
     if (codes.length === 0) continue;
-
-    // Find matching ingredient_id by NOTICE name substring match (best-effort)
     let ingredient_id: string | undefined;
-    for (const [inci, id] of idMap.entries()) {
+    for (const [inci, id] of idByInci.entries()) {
       if (possibleInci.toLowerCase().startsWith(inci.toLowerCase())) {
         ingredient_id = id;
         break;
       }
     }
-    if (!ingredient_id) {
-      unmatched++;
-      continue;
-    }
-
+    if (!ingredient_id) { unmatched++; continue; }
     for (const code of codes) {
       const reg = regIndex.get(`${ingredient_id}:${code}`);
       if (reg) {
         const detailParts = [d.LIMIT_COND, d.PROVIS_ATRCL].filter(Boolean);
         if (detailParts.length > 0) {
           const detailText = detailParts.join("\n\n");
-          if (!reg.conditions) {
-            reg.conditions = detailText;
-          } else if (!reg.conditions.includes(detailText.slice(0, 50))) {
+          if (!reg.conditions) reg.conditions = detailText;
+          else if (!reg.conditions.includes(detailText.slice(0, 50))) {
             reg.conditions = `${reg.conditions}\n---\n${detailText}`;
           }
         }
@@ -304,170 +228,132 @@ function enrichRegulationsWithDetail(
   console.log(`    detail enrichment: ${matched} matched, ${unmatched} unmatched`);
 }
 
-// ============================================================
-// Stage 5: Bulk insert regulations (delete-then-insert for idempotency,
-// avoids needing a unique constraint migration)
-// ============================================================
-async function replaceMfdsRegulations(
-  supabase: ReturnType<typeof supabaseAdmin>,
-  regulations: RegulationRow[],
-) {
-  const { error: delErr } = await supabase
-    .from("regulations")
-    .delete()
-    .eq("source_document", SOURCE_DOC);
-  if (delErr) throw new Error(`Failed to clear old MFDS regulations: ${delErr.message}`);
+const ADDITIONAL_COUNTRIES: CountryRow[] = [
+  { code: "TW", name_ko: "대만", inherits_from: null, regulation_type: "positive_list" },
+  { code: "BR", name_ko: "브라질", inherits_from: null, regulation_type: "negative_list" },
+  { code: "AR", name_ko: "아르헨티나", inherits_from: null, regulation_type: "negative_list" },
+  { code: "CA", name_ko: "캐나다", inherits_from: null, regulation_type: "negative_list" },
+];
 
-  const BATCH = 500;
-  for (let i = 0; i < regulations.length; i += BATCH) {
-    const slice = regulations.slice(i, i + BATCH);
-    const { error } = await supabase.from("regulations").insert(slice);
-    if (error) throw new Error(`Regulation insert batch ${i}: ${error.message}`);
-    console.log(`    inserted ${Math.min(i + BATCH, regulations.length)}/${regulations.length}`);
+async function ensureCountries() {
+  const existing = await readRows<CountryRow>("countries");
+  if (existing.length === 0) {
+    // Bootstrap — first run with no DB seed. 15-country base list (regulation_type defaults).
+    const base: CountryRow[] = [
+      { code: "KR", name_ko: "한국", inherits_from: null, regulation_type: "negative_list" },
+      { code: "CN", name_ko: "중국", inherits_from: null, regulation_type: "positive_list" },
+      { code: "EU", name_ko: "EU", inherits_from: null, regulation_type: "hybrid" },
+      { code: "US", name_ko: "미국", inherits_from: null, regulation_type: "negative_list" },
+      { code: "JP", name_ko: "일본", inherits_from: null, regulation_type: "hybrid" },
+      { code: "VN", name_ko: "베트남", inherits_from: "EU", regulation_type: "hybrid" },
+      { code: "TH", name_ko: "태국", inherits_from: "EU", regulation_type: "hybrid" },
+      { code: "ID", name_ko: "인도네시아", inherits_from: "EU", regulation_type: "hybrid" },
+      { code: "MY", name_ko: "말레이시아", inherits_from: "EU", regulation_type: "hybrid" },
+      { code: "PH", name_ko: "필리핀", inherits_from: "EU", regulation_type: "hybrid" },
+      { code: "SG", name_ko: "싱가포르", inherits_from: "EU", regulation_type: "hybrid" },
+      ...ADDITIONAL_COUNTRIES,
+    ];
+    await writeRows("countries", base);
+    return base;
   }
-}
-
-/**
- * MFDS API 수집 세션을 대표하는 source_documents 행 upsert.
- * 매 실행마다 last_checked_at·last_changed_at 갱신 + regulation_source_id(KR primary) FK.
- * buildRegulationsFromRestriction이 이 ID를 각 regulations 행의 source_document_id에 채움.
- */
-async function upsertMfdsSourceDocument(
-  supabase: ReturnType<typeof supabaseAdmin>,
-  version: string,
-): Promise<string> {
-  const rs = await supabase
-    .from("regulation_sources")
-    .select("id")
-    .eq("country_code", "KR")
-    .eq("name", MFDS_SOURCE_NAME)
-    .maybeSingle();
-  const regSourceId = (rs.data?.id as string | null) ?? null;
-
-  const now = new Date().toISOString();
-  const { data, error } = await supabase
-    .from("source_documents")
-    .upsert(
-      {
-        country_code: "KR",
-        doc_key: MFDS_DOC_KEY,
-        title: SOURCE_DOC,
-        source_url: SOURCE_URL_BASE,
-        last_checked_at: now,
-        last_changed_at: now,
-        check_status: "ok",
-        regulation_source_id: regSourceId,
-        detect_method: "api",
-        notes: null,
-      },
-      { onConflict: "country_code,doc_key" },
-    )
-    .select("id")
-    .single();
-  if (error) throw new Error(`source_documents upsert failed: ${error.message}`);
-
-  // regulation_sources 통계 갱신 (KR primary API 경로 — 매일 작동함을 증명)
-  if (regSourceId) {
-    await supabase
-      .from("regulation_sources")
-      .update({
-        last_checked_at: now,
-        last_changed_at: now,
-        check_status: "ok",
-        last_error: null,
-        consecutive_failures: 0,
-      })
-      .eq("id", regSourceId);
+  const codes = new Set(existing.map((c) => c.code));
+  let changed = false;
+  for (const a of ADDITIONAL_COUNTRIES) {
+    if (!codes.has(a.code)) { existing.push(a); changed = true; }
   }
-
-  console.log(`  source_documents id: ${data.id}, version: ${version}`);
-  return data.id as string;
+  if (changed) await writeRows("countries", existing);
+  return existing;
 }
 
-async function ensureAdditionalCountries(supabase: ReturnType<typeof supabaseAdmin>) {
-  const rows = [
-    { code: "TW", name_ko: "대만", name_en: "Taiwan", regulation_framework: "TW_TFDA", notes: "대만 식품약물관리서(TFDA)" },
-    { code: "BR", name_ko: "브라질", name_en: "Brazil", regulation_framework: "ANVISA_BR", notes: "ANVISA" },
-    { code: "AR", name_ko: "아르헨티나", name_en: "Argentina", regulation_framework: "ANMAT_AR", notes: "ANMAT" },
-    { code: "CA", name_ko: "캐나다", name_en: "Canada", regulation_framework: "HC_CA", notes: "Health Canada" },
-  ].map((r) => ({ ...r, inherits_from: null }));
-  const { error } = await supabase.from("countries").upsert(rows, { onConflict: "code" });
-  if (error) throw new Error(`Failed to upsert countries: ${error.message}`);
-}
-
-// ============================================================
-// Main
-// ============================================================
 async function main() {
-  const supabase = supabaseAdmin();
   const startedAt = Date.now();
+  console.log("▶ [0/5] countries.json bootstrap...");
+  const countries = await ensureCountries();
 
-  console.log("▶ [0/5] Ensuring TW/BR/AR/CA countries present...");
-  await ensureAdditionalCountries(supabase);
-
-  console.log("▶ [1/5] Fetching ingredient master (getCsmtcsIngdCpntInfoService01)...");
+  console.log("▶ [1/5] Fetching ingredient master...");
   const ingMaster = await fetchAllPages<IngredientMasterItem>(
     "CsmtcsIngdCpntInfoService01",
     "getCsmtcsIngdCpntInfoService01",
-    {
-      onProgress: (loaded, total) => {
-        if (loaded % 2000 === 0 || loaded === total) console.log(`    ${loaded}/${total}`);
-      },
-    },
+    { onProgress: (l, t) => { if (l % 2000 === 0 || l === t) console.log(`    ${l}/${t}`); } },
   );
 
-  console.log("▶ [2/5] Fetching use-restriction rows (getCsmtcsUseRstrcInfoService)...");
+  console.log("▶ [2/5] Fetching restrictions...");
   const restrictions = await fetchAllPages<UseRestrictionItem>(
     "CsmtcsUseRstrcInfoService",
     "getCsmtcsUseRstrcInfoService",
-    {
-      onProgress: (loaded, total) => {
-        if (loaded % 3000 === 0 || loaded === total) console.log(`    ${loaded}/${total}`);
-      },
-    },
+    { onProgress: (l, t) => { if (l % 3000 === 0 || l === t) console.log(`    ${l}/${t}`); } },
   );
 
-  console.log("▶ [3/5] Fetching country-detail rows (getCsmtcsUseRstrcNatnInfoService)...");
+  console.log("▶ [3/5] Fetching country-detail...");
   const details = await fetchAllPages<CountryDetailItem>(
     "CsmtcsUseRstrcInfoService",
     "getCsmtcsUseRstrcNatnInfoService",
-    {
-      onProgress: (loaded, total) => {
-        if (loaded % 2000 === 0 || loaded === total) console.log(`    ${loaded}/${total}`);
-      },
-    },
+    { onProgress: (l, t) => { if (l % 2000 === 0 || l === t) console.log(`    ${l}/${t}`); } },
   );
 
-  // Aggregate API is redundant for now; skip to save trafficquota. Can enable later.
-  console.log("▶ [4/5] Building canonical ingredients + upserting to DB...");
-  const canonical = await stage1IngredientMaster(ingMaster);
+  console.log("▶ [4/5] Building canonical ingredients + merging into ingredients.json...");
+  const canonical = stage1IngredientMaster(ingMaster);
   mergeRestrictionIngredients(canonical, restrictions);
-  const ingredientList = Array.from(canonical.values());
-  console.log(`  total canonical ingredients: ${ingredientList.length}`);
 
-  const idMap = await upsertIngredients(supabase, ingredientList);
-  console.log(`  id map size: ${idMap.size}`);
+  // Load existing ingredients to preserve id, function_category, multi-language names from prior enrichment.
+  const existingIngredients = await readRows<IngredientRow>("ingredients");
+  const existingByInci = new Map<string, IngredientRow>();
+  for (const e of existingIngredients) existingByInci.set(e.inci_name, e);
 
-  // source_documents row를 먼저 upsert — 이후 regulations가 source_document_id FK로 연결
-  const runDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-  const sourceVersion = `MFDS-${runDate}`;
-  const sourceDocId = await upsertMfdsSourceDocument(supabase, sourceVersion);
-
-  console.log("▶ [5/5] Building regulations + upserting...");
-  const regulations = buildRegulationsFromRestriction(restrictions, idMap, sourceDocId, sourceVersion);
-  console.log(`  regulations built: ${regulations.length}`);
-
-  if (details.length > 0) {
-    enrichRegulationsWithDetail(regulations, details, idMap);
+  const mergedIngredients: IngredientRow[] = [];
+  const idByInci = new Map<string, string>();
+  for (const c of canonical.values()) {
+    const prev = existingByInci.get(c.inci_name);
+    const id = prev?.id ?? randomUUID();
+    idByInci.set(c.inci_name, id);
+    mergedIngredients.push({
+      id,
+      inci_name: c.inci_name,
+      korean_name: c.korean_name ?? prev?.korean_name ?? null,
+      chinese_name: prev?.chinese_name ?? c.chinese_name,
+      japanese_name: prev?.japanese_name ?? c.japanese_name,
+      cas_no: c.cas_no ?? prev?.cas_no ?? null,
+      synonyms: Array.from(new Set([...(c.synonyms ?? []), ...(prev?.synonyms ?? [])])),
+      description: prev?.description ?? c.description,
+      // 보강 결과(Gemini) 보존
+      function_category: prev?.function_category ?? null,
+      function_description: prev?.function_description ?? null,
+    });
   }
+  // Ingredients that existed before but no longer in MFDS — keep (other sources / historical)
+  for (const e of existingIngredients) {
+    if (!idByInci.has(e.inci_name)) {
+      mergedIngredients.push(e);
+      idByInci.set(e.inci_name, e.id);
+    }
+  }
+  await writeRows("ingredients", mergedIngredients);
+  console.log(`  ingredients.json: ${mergedIngredients.length} rows (canonical ${canonical.size} + retained ${mergedIngredients.length - canonical.size})`);
 
-  await replaceMfdsRegulations(supabase, regulations);
+  console.log("▶ [5/5] Building regulations + replacing MFDS rows...");
+  const runDate = new Date().toISOString().slice(0, 10);
+  const sourceVersion = `MFDS-${runDate}`;
+  const newMfdsRegs = buildRegulationsFromRestriction(restrictions, idByInci, sourceVersion);
+  if (details.length > 0) enrichRegulationsWithDetail(newMfdsRegs, details, idByInci);
+
+  const existingRegs = await readRows<RegulationRow>("regulations");
+  const nonMfds = existingRegs.filter((r) => r.source_document !== SOURCE_DOC);
+  const finalRegs = [...nonMfds, ...newMfdsRegs];
+  await writeRows("regulations", finalRegs);
+  console.log(`  regulations.json: ${finalRegs.length} rows (MFDS ${newMfdsRegs.length} + other-sources ${nonMfds.length})`);
+
+  await updateMeta({
+    countries: countries.length,
+    ingredients: mergedIngredients.length,
+    regulations: finalRegs.length,
+  });
 
   const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
   const unknown = getUnknownCountries();
   console.log(`\n=== summary (${elapsed}s) ===`);
-  console.log(`  ingredients upserted: ${idMap.size}`);
-  console.log(`  regulations upserted: ${regulations.length}`);
+  console.log(`  countries: ${countries.length}`);
+  console.log(`  ingredients: ${mergedIngredients.length}`);
+  console.log(`  regulations: ${finalRegs.length} (MFDS ${newMfdsRegs.length})`);
   if (unknown.length > 0) console.log(`  unknown country names: ${unknown.join(", ")}`);
 }
 
