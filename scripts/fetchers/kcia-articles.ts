@@ -26,6 +26,7 @@ interface KciaArticle {
   attach_hwp: boolean;
   attach_excel: boolean;
   detail_url: string;     // KCIA 게시물 페이지 (사용자 클릭용)
+  body_excerpt?: string | null;  // 본문 한국어 발췌 (회원 로그인 X — 본문 text 만)
 }
 
 // 국가 추론 휴리스틱 — 제목 키워드 매칭
@@ -116,6 +117,45 @@ function parseList(html: string, category: string): KciaArticle[] {
   return articles;
 }
 
+async function fetchDetailBody(detailUrl: string, cookies: Record<string, string>, referer: string): Promise<string | null> {
+  try {
+    const cookieHeader = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
+    const res = await fetch(detailUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0.0.0",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+        "Referer": referer,
+        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+      },
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    // sp_title 부터 article 끝 부분까지 추출 후 tag 제거
+    const i = html.indexOf("sp_title");
+    if (i < 0) return null;
+    const region = html.slice(i, i + 12000);
+    let text = region
+      .replace(/<style[\s\S]*?<\/style>/g, "")
+      .replace(/<script[\s\S]*?<\/script>/g, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/\s+/g, " ")
+      .trim();
+    // 본문은 보통 "조회수 NNNN" 다음 ~ "이전글" 또는 "다음글" 직전
+    const startMatch = text.match(/조회수\s*\d+\s*(.+?)(?:이전글|다음글|var page_|function )/);
+    if (startMatch) text = startMatch[1].trim();
+    // 너무 길면 1500자로 자르기
+    return text.length > 1500 ? text.slice(0, 1500) + "..." : text || null;
+  } catch {
+    return null;
+  }
+}
+
 async function main() {
   const startedAt = Date.now();
   // session 시작 — main 페이지 GET
@@ -147,6 +187,18 @@ async function main() {
   const unique = new Map<string, KciaArticle>();
   for (const a of all) if (!unique.has(a.no)) unique.set(a.no, a);
   const final = Array.from(unique.values());
+
+  // 본문 발췌 자동 추출 (1초 interval — KCIA 부담 최소)
+  console.log(`▶ detail body 추출 (${final.length}건)...`);
+  for (let i = 0; i < final.length; i++) {
+    const a = final[i];
+    const referer = a.category === "중국법령"
+      ? `${BASE}/home/law/law_09.php`
+      : `${BASE}/home/law/law_05.php`;
+    a.body_excerpt = await fetchDetailBody(a.detail_url, cookies, referer);
+    if ((i + 1) % 5 === 0) console.log(`  ${i + 1}/${final.length}`);
+    await new Promise((r) => setTimeout(r, 500));
+  }
 
   await writeRows("kcia-articles", final);
   await updateMeta({});

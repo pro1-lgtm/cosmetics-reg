@@ -426,23 +426,30 @@ function CountryCard({ result }: { result: CountryLookupResult }) {
           <summary className="cursor-pointer text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">
             관련 협회 자료 (KCIA) {result.kcia_articles.length}건
           </summary>
-          <ul className="mt-1.5 space-y-1">
+          <ul className="mt-1.5 space-y-2">
             {result.kcia_articles.map((a) => (
-              <li key={a.no} className="flex items-baseline gap-1.5">
-                <span className="text-zinc-400 tabular-nums">{a.date}</span>
-                <a
-                  href={a.detail_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex-1 text-zinc-700 underline decoration-dotted hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-50"
-                >
-                  {a.title}
-                </a>
+              <li key={a.no} className="border-l-2 border-zinc-200 pl-2 dark:border-zinc-800">
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-zinc-400 tabular-nums">{a.date}</span>
+                  <a
+                    href={a.detail_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-1 text-zinc-700 underline decoration-dotted hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-50"
+                  >
+                    {a.title}
+                  </a>
+                </div>
+                {a.body_excerpt && (
+                  <p className="mt-0.5 text-[10px] text-zinc-500 leading-relaxed line-clamp-3 dark:text-zinc-500">
+                    {a.body_excerpt}
+                  </p>
+                )}
               </li>
             ))}
           </ul>
           <p className="mt-1.5 text-[10px] text-zinc-400">
-            * 첨부 PDF 다운로드는 대한화장품협회 회원 로그인 필요
+            * 본문 발췌만 표시 — 첨부 PDF 다운로드는 대한화장품협회 회원 로그인 필요
           </p>
         </details>
       )}

@@ -65,6 +65,23 @@ jobs:
         run: npm run ca:hotlist
         continue-on-error: true
 
+      # 차단 사이트들의 메인 페이지 raw HTML 자동 저장 (분석 추후).
+      - name: Try EU EUR-Lex 1223/2009 consolidated
+        run: npm run fetch:try -- EU "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=CELEX:02009R1223-20240817" eu_eurlex_1223
+        continue-on-error: true
+
+      - name: Try BR ANVISA cosmetics index
+        run: npm run fetch:try -- BR "https://www.gov.br/anvisa/pt-br/assuntos/cosmeticos" br_anvisa_index
+        continue-on-error: true
+
+      - name: Try AR ANMAT cosmetics index
+        run: npm run fetch:try -- AR "https://www.argentina.gob.ar/anmat/regulados/cosmeticos" ar_anmat_index
+        continue-on-error: true
+
+      - name: Try CN NMPA cosmetic regulations
+        run: npm run fetch:try -- CN "https://www.nmpa.gov.cn/xxgk/fgwj/gzwj/gzwjhzhp/index.html" cn_nmpa_regulations
+        continue-on-error: true
+
       # 3) 보조 HTML 소스 hash diff → source-status.json + detected-changes.json + .crawl-raw/
       - name: Crawl HTML sources
         run: npm run crawl

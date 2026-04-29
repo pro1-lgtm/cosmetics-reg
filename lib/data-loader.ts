@@ -80,6 +80,7 @@ export interface KciaArticle {
   attach_hwp: boolean;
   attach_excel: boolean;
   detail_url: string;
+  body_excerpt?: string | null;
 }
 
 export interface Dataset {
