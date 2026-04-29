@@ -2,7 +2,7 @@ import { loadEnv } from "../crawlers/env";
 loadEnv();
 import { execSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
-import { supabaseAdmin } from "../../lib/supabase";
+import { supabaseAdmin } from "../../lib/supabase-admin";
 
 // detected_changes.review_status='pending' 목록을 모아 draft PR 자동 생성.
 // GitHub Actions 안에서 실행. GH_TOKEN 필요.

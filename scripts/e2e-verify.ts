@@ -2,11 +2,14 @@ import { chromium, type Page } from "playwright";
 import { mkdir } from "node:fs/promises";
 import { loadEnv } from "./crawlers/env";
 loadEnv();
-import { supabaseAdmin } from "../lib/supabase";
+import { supabaseAdmin } from "../lib/supabase-admin";
 
-// BASE는 E2E_BASE 환경변수 또는 기본 prod URL. localhost 검증 시 E2E_BASE=http://localhost:3000.
+// BASE는 E2E_BASE 환경변수 또는 기본 prod URL. localhost 정적 검증 시 E2E_BASE=http://localhost:3010.
 const BASE = process.env.E2E_BASE ?? "https://cosmetics-reg-tim10000.netlify.app";
 const SHOT_DIR = ".e2e-shots";
+// Static export 후엔 /api/* 와 middleware 가 없음. 헤더 검증은 호스팅 레이어 몫.
+// localhost 정적 서버(npx serve)는 보안 헤더를 부여하지 않으므로 prod 호스트일 때만 확인.
+const IS_PROD_HOST = BASE.startsWith("https://");
 
 type Result = { name: string; ok: boolean; detail: string };
 const results: Result[] = [];
@@ -179,36 +182,35 @@ async function main() {
     role === 1 && listboxVisible && expanded === "true",
     `role=${role} listbox-visible=${listboxVisible} expanded=${expanded} (initial listbox=${hasListbox})`);
 
-  // T21 /sources 대시보드 페이지
+  // T21 /sources 대시보드 (클라이언트 컴포넌트 — fetch 후 테이블 렌더 대기)
   const srcRes = await page.goto(`${BASE}/sources`, { waitUntil: "networkidle", timeout: 30_000 });
   const srcStatus = srcRes?.status() ?? 0;
+  await page.waitForTimeout(1500);
   const srcBody = await page.textContent("body");
   record("T21 /sources 대시보드",
     srcStatus === 200 && (srcBody?.includes("regulation_sources") ?? false),
     `HTTP ${srcStatus} + 테이블 렌더`);
   await page.screenshot({ path: `${SHOT_DIR}/t21-sources.png`, fullPage: true });
 
-  // T22 rate limit 헤더 노출 — /api/* middleware
-  const rlRes = await page.request.post(`${BASE}/api/search`, { data: { query: "Retinol" } });
-  const rlHdrs = rlRes.headers();
-  const hasLimit = !!rlHdrs["x-ratelimit-limit"];
-  const hasRemaining = !!rlHdrs["x-ratelimit-remaining"];
-  record("T22 rate limit 헤더 노출",
-    hasLimit && hasRemaining,
-    `limit=${rlHdrs["x-ratelimit-limit"]} remaining=${rlHdrs["x-ratelimit-remaining"]}`);
+  // T22 — Static export 이후 middleware 제거. 정적 사이트엔 /api/* 자체가 없으므로 N/A.
+  record("T22 rate limit (Static 모드 — middleware 제거)", true, "n/a");
 
-  // T23 보안 헤더 (production) — 정적 페이지 응답
-  const secRes = await page.request.get(BASE);
-  const secH = secRes.headers();
-  const secOk = !!secH["x-content-type-options"] && !!secH["x-frame-options"] && !!secH["strict-transport-security"];
-  record("T23 보안 헤더 5종", secOk,
-    `XCTO=${!!secH["x-content-type-options"]} XFO=${!!secH["x-frame-options"]} HSTS=${!!secH["strict-transport-security"]}`);
-
-  // T24 CSP-Report-Only 노출
-  const csp = secH["content-security-policy-report-only"];
-  record("T24 CSP-Report-Only",
-    !!csp && csp.includes("supabase.co") && csp.includes("generativelanguage"),
-    csp ? "supabase+gemini allowlist OK" : "MISSING");
+  // T23/T24 보안 헤더는 호스팅 레이어 (Netlify _headers / netlify.toml) 몫.
+  // localhost npx serve 는 헤더를 부여하지 않으므로 prod 호스트일 때만 검증.
+  if (IS_PROD_HOST) {
+    const secRes = await page.request.get(BASE);
+    const secH = secRes.headers();
+    const secOk = !!secH["x-content-type-options"] && !!secH["x-frame-options"] && !!secH["strict-transport-security"];
+    record("T23 보안 헤더 5종", secOk,
+      `XCTO=${!!secH["x-content-type-options"]} XFO=${!!secH["x-frame-options"]} HSTS=${!!secH["strict-transport-security"]}`);
+    const csp = secH["content-security-policy-report-only"];
+    record("T24 CSP-Report-Only",
+      !!csp && csp.includes("supabase.co"),
+      csp ? "supabase allowlist OK" : "MISSING");
+  } else {
+    record("T23 보안 헤더 (host-layer only — localhost skip)", true, "n/a on npx serve");
+    record("T24 CSP (host-layer only — localhost skip)", true, "n/a on npx serve");
+  }
 
   // T25 robots.txt + sitemap
   const rob = await page.request.get(`${BASE}/robots.txt`);

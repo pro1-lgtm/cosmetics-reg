@@ -1,6 +1,6 @@
 import { loadEnv } from "../crawlers/env";
 loadEnv();
-import { supabaseAdmin } from "../../lib/supabase";
+import { supabaseAdmin } from "../../lib/supabase-admin";
 
 /**
  * 활성 regulations(valid_to IS NULL)에서 동일 (ingredient_id, country_code) 가

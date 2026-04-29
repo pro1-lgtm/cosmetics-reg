@@ -1,7 +1,7 @@
 import { loadEnv } from "../crawlers/env";
 loadEnv();
 
-import { supabaseAdmin } from "../../lib/supabase";
+import { supabaseAdmin } from "../../lib/supabase-admin";
 import { REGULATION_SOURCES } from "./registry";
 
 async function main() {

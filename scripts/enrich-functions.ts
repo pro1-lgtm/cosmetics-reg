@@ -2,7 +2,7 @@ import { loadEnv } from "./crawlers/env";
 loadEnv();
 
 import { GoogleGenAI } from "@google/genai";
-import { supabaseAdmin } from "../lib/supabase";
+import { supabaseAdmin } from "../lib/supabase-admin";
 
 // Allowed function categories. Gemini must pick ONE (or null) from this set.
 const CATEGORIES = [

@@ -1,7 +1,7 @@
 import { loadEnv } from "../crawlers/env";
 loadEnv();
 
-import { supabaseAdmin } from "../../lib/supabase";
+import { supabaseAdmin } from "../../lib/supabase-admin";
 
 // Thresholds
 const STALE_CHECK_HOURS = 48;           // last_checked_at older than this = workflow not running

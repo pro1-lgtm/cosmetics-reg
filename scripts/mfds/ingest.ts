@@ -1,7 +1,7 @@
 import { loadEnv } from "../crawlers/env";
 loadEnv();
 
-import { supabaseAdmin } from "../../lib/supabase";
+import { supabaseAdmin } from "../../lib/supabase-admin";
 import { fetchAllPages } from "./client";
 import { mapCountryName, getUnknownCountries } from "./country-mapping";
 import type {

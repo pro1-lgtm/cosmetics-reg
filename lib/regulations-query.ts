@@ -1,4 +1,4 @@
-import { supabaseAdmin } from "./supabase";
+import { supabaseClient } from "./supabase";
 
 // Escape PostgREST ILIKE special chars AND filter-string separators. Commas, parens,
 // backslashes, and wildcards (%, _) can let user input corrupt an `or()` filter string
@@ -55,7 +55,7 @@ export async function lookupRegulation(
   query: string,
   countries?: string[],
 ): Promise<LookupResponse> {
-  const supabase = supabaseAdmin();
+  const supabase = supabaseClient();
   const q = query.trim();
   const safe = sanitizeIlikeValue(q);
   if (!safe) return { query: q, ingredient: null, results: [] };

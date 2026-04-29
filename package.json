@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "serve": "npx --yes serve out -l 3010",
     "lint": "eslint",
     "verify": "tsx scripts/verify-setup.ts",
     "crawl": "tsx scripts/crawlers/run.ts",

@@ -1,10 +1,30 @@
-import { supabaseAdmin } from "@/lib/supabase";
+"use client";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+import { useEffect, useState } from "react";
+import { supabaseClient } from "@/lib/supabase";
 
-// 소스 상태 대시보드. service_role 필요 (anon은 RLS 차단).
-// 매 요청마다 최신 상태 — 캐시 안 함.
+// 소스 상태 대시보드. RLS anon read 정책(migration 0007) 의존.
+// Static export 호환을 위해 클라이언트 컴포넌트 — 진입 시점 fetch.
+
+interface SourceRow {
+  id: string;
+  country_code: string;
+  name: string;
+  tier: string;
+  detect_method: string;
+  check_status: string | null;
+  last_checked_at: string | null;
+  last_changed_at: string | null;
+  consecutive_failures: number;
+  priority: number;
+}
+
+interface PendingChange {
+  country_code: string;
+  change_type: string;
+  detected_at: string;
+  diff_summary: string | null;
+}
 
 function staleHours(since: string | null): string {
   if (!since) return "never";
@@ -29,14 +49,27 @@ function statusClass(status: string | null): string {
   return "bg-zinc-100 text-zinc-600";
 }
 
-export default async function SourcesPage() {
-  const s = supabaseAdmin();
-  const [sourcesRes, pendingRes] = await Promise.all([
-    s.from("regulation_sources").select("*").order("country_code").order("priority", { ascending: false }),
-    s.from("detected_changes").select("country_code, change_type, detected_at, diff_summary").eq("review_status", "pending").order("detected_at", { ascending: false }).limit(20),
-  ]);
-  const sources = sourcesRes.data ?? [];
-  const pending = pendingRes.data ?? [];
+export default function SourcesPage() {
+  const [sources, setSources] = useState<SourceRow[]>([]);
+  const [pending, setPending] = useState<PendingChange[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const s = supabaseClient();
+    Promise.all([
+      s.from("regulation_sources").select("*").order("country_code").order("priority", { ascending: false }),
+      s.from("detected_changes").select("country_code, change_type, detected_at, diff_summary").eq("review_status", "pending").order("detected_at", { ascending: false }).limit(20),
+    ])
+      .then(([sourcesRes, pendingRes]) => {
+        if (sourcesRes.error) throw new Error(`regulation_sources: ${sourcesRes.error.message}`);
+        if (pendingRes.error) throw new Error(`detected_changes: ${pendingRes.error.message}`);
+        setSources((sourcesRes.data ?? []) as SourceRow[]);
+        setPending((pendingRes.data ?? []) as PendingChange[]);
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false));
+  }, []);
 
   return (
     <main className="mx-auto w-full max-w-6xl px-6 py-10">
@@ -49,61 +82,73 @@ export default async function SourcesPage() {
         </p>
       </header>
 
+      {error && (
+        <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+          {error}
+        </div>
+      )}
+
       <section className="mb-10">
         <h2 className="mb-3 text-lg font-medium">regulation_sources ({sources.length}건)</h2>
-        <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
-          <table className="min-w-full text-sm">
-            <thead className="bg-zinc-50 text-xs uppercase text-zinc-500 dark:bg-zinc-900">
-              <tr>
-                <th className="px-3 py-2 text-left">국가</th>
-                <th className="px-3 py-2 text-left">소스</th>
-                <th className="px-3 py-2 text-left">tier</th>
-                <th className="px-3 py-2 text-left">method</th>
-                <th className="px-3 py-2 text-left">상태</th>
-                <th className="px-3 py-2 text-left">최근 확인</th>
-                <th className="px-3 py-2 text-left">최근 변경</th>
-                <th className="px-3 py-2 text-right">연속 실패</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sources.map((r) => (
-                <tr key={r.id as string} className="border-t border-zinc-100 dark:border-zinc-800">
-                  <td className="px-3 py-2 font-medium">{r.country_code}</td>
-                  <td className="px-3 py-2">{r.name}</td>
-                  <td className="px-3 py-2 text-xs text-zinc-500">{r.tier}</td>
-                  <td className="px-3 py-2 text-xs">{r.detect_method}</td>
-                  <td className="px-3 py-2">
-                    <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${statusClass(r.check_status as string | null)}`}>
-                      {String(r.check_status ?? "never")}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className={`inline-block rounded px-2 py-0.5 text-xs ${stalenessClass(r.last_checked_at as string | null)}`}>
-                      {staleHours(r.last_checked_at as string | null)}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-xs text-zinc-500">
-                    {staleHours(r.last_changed_at as string | null)}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    {Number(r.consecutive_failures ?? 0) > 0 ? (
-                      <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">
-                        {String(r.consecutive_failures)}
-                      </span>
-                    ) : (
-                      <span className="text-xs text-zinc-400">0</span>
-                    )}
-                  </td>
+        {loading ? (
+          <p className="text-sm text-zinc-500">로딩 중…</p>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+            <table className="min-w-full text-sm">
+              <thead className="bg-zinc-50 text-xs uppercase text-zinc-500 dark:bg-zinc-900">
+                <tr>
+                  <th className="px-3 py-2 text-left">국가</th>
+                  <th className="px-3 py-2 text-left">소스</th>
+                  <th className="px-3 py-2 text-left">tier</th>
+                  <th className="px-3 py-2 text-left">method</th>
+                  <th className="px-3 py-2 text-left">상태</th>
+                  <th className="px-3 py-2 text-left">최근 확인</th>
+                  <th className="px-3 py-2 text-left">최근 변경</th>
+                  <th className="px-3 py-2 text-right">연속 실패</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {sources.map((r) => (
+                  <tr key={r.id} className="border-t border-zinc-100 dark:border-zinc-800">
+                    <td className="px-3 py-2 font-medium">{r.country_code}</td>
+                    <td className="px-3 py-2">{r.name}</td>
+                    <td className="px-3 py-2 text-xs text-zinc-500">{r.tier}</td>
+                    <td className="px-3 py-2 text-xs">{r.detect_method}</td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${statusClass(r.check_status)}`}>
+                        {String(r.check_status ?? "never")}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-block rounded px-2 py-0.5 text-xs ${stalenessClass(r.last_checked_at)}`}>
+                        {staleHours(r.last_checked_at)}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-xs text-zinc-500">
+                      {staleHours(r.last_changed_at)}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {Number(r.consecutive_failures ?? 0) > 0 ? (
+                        <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">
+                          {String(r.consecutive_failures)}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-zinc-400">0</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       <section>
         <h2 className="mb-3 text-lg font-medium">미검수 변경 이벤트 (최근 20)</h2>
-        {pending.length === 0 ? (
+        {loading ? (
+          <p className="text-sm text-zinc-500">로딩 중…</p>
+        ) : pending.length === 0 ? (
           <p className="text-sm text-zinc-500">pending 이벤트 없음 ✓</p>
         ) : (
           <ul className="space-y-2">
@@ -112,7 +157,7 @@ export default async function SourcesPage() {
                 <div className="mb-1 flex items-center gap-2 text-xs text-zinc-500">
                   <span className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">{r.country_code}</span>
                   <span>{r.change_type}</span>
-                  <span>{new Date(r.detected_at as string).toLocaleString("ko-KR")}</span>
+                  <span>{new Date(r.detected_at).toLocaleString("ko-KR")}</span>
                 </div>
                 <div className="text-zinc-700 dark:text-zinc-300">{r.diff_summary ?? "(no summary)"}</div>
               </li>

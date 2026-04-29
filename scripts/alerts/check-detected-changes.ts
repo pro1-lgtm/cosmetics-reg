@@ -1,6 +1,6 @@
 import { loadEnv } from "../crawlers/env";
 loadEnv();
-import { supabaseAdmin } from "../../lib/supabase";
+import { supabaseAdmin } from "../../lib/supabase-admin";
 
 // detected_changes.review_status='pending' 이 일정 수 이상 쌓여 있으면 경고.
 // GitHub Actions에서 non-zero exit로 실행자(저장소 owner)에게 이메일 자동 발송.

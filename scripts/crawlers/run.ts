@@ -1,7 +1,7 @@
 import { loadEnv } from "./env";
 loadEnv();
 
-import { supabaseAdmin } from "../../lib/supabase";
+import { supabaseAdmin } from "../../lib/supabase-admin";
 import { runCrawler, fetchUrl } from "./base";
 import type { CrawlOutcome } from "./types";
 import type { CrawlerSourceWithRegistry } from "./base";

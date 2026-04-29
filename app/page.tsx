@@ -2,13 +2,8 @@
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import type { LookupResponse, CountryLookupResult } from "@/lib/regulations-query";
-
-interface Suggestion {
-  inci_name: string;
-  korean_name: string | null;
-  cas_no: string | null;
-}
+import { lookupRegulation, type LookupResponse, type CountryLookupResult } from "@/lib/regulations-query";
+import { fetchSuggestions, type Suggestion } from "@/lib/autocomplete-query";
 
 export default function Home() {
   return (
@@ -41,12 +36,11 @@ function HomeInner() {
     const ac = new AbortController();
     const t = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/autocomplete?q=${encodeURIComponent(q)}`, {
-          signal: ac.signal,
-        });
-        const data = (await res.json()) as Suggestion[];
-        setSuggestions(Array.isArray(data) ? data : []);
-        setActiveIdx(-1);
+        const data = await fetchSuggestions(q, ac.signal);
+        if (!ac.signal.aborted) {
+          setSuggestions(data);
+          setActiveIdx(-1);
+        }
       } catch (e) {
         if ((e as { name?: string }).name !== "AbortError") setSuggestions([]);
       }
@@ -76,13 +70,8 @@ function HomeInner() {
     // URL 딥링크: ?q=... 로 직접 공유·뒤로가기 가능. replace로 history 폭증 방지.
     router.replace(`/?q=${encodeURIComponent(trimmed)}`, { scroll: false });
     try {
-      const res = await fetch("/api/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: trimmed }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "검색 실패");
+      if (trimmed.length > 256) throw new Error("query too long (max 256)");
+      const data = await lookupRegulation(trimmed);
       setResponse(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

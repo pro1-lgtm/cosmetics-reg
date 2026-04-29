@@ -25,7 +25,7 @@ jobs:
         run: npx eslint .
 
   e2e:
-    name: 프로덕션 E2E (Playwright)
+    name: 정적 빌드 + E2E (Playwright)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: static
@@ -33,6 +33,7 @@ jobs:
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      E2E_BASE: http://localhost:3010
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -42,7 +43,13 @@ jobs:
       - run: npm ci
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
-      - name: Run E2E 18 scenarios
+      - name: Build static site (out/)
+        run: npm run build
+      - name: Serve out/ on :3010 (background)
+        run: |
+          npx --yes serve out -l 3010 &
+          for i in {1..30}; do curl -sf http://localhost:3010/ >/dev/null && break; sleep 1; done
+      - name: Run E2E scenarios
         run: npm run e2e
       - name: Upload screenshots on failure
         if: failure()

@@ -3,7 +3,7 @@ loadEnv();
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { supabaseAdmin } from "../../lib/supabase";
+import { supabaseAdmin } from "../../lib/supabase-admin";
 import { extractWithModel } from "./extractor";
 import { consensusCheck } from "./consensus";
 import { applyOutcomes } from "./upsert";

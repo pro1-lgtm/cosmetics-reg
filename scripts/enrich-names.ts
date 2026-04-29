@@ -2,7 +2,7 @@ import { loadEnv } from "./crawlers/env";
 loadEnv();
 
 import { GoogleGenAI } from "@google/genai";
-import { supabaseAdmin } from "../lib/supabase";
+import { supabaseAdmin } from "../lib/supabase-admin";
 
 const SCHEMA = {
   type: "object",

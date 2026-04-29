@@ -1,6 +1,6 @@
 import { loadEnv } from "./crawlers/env";
 loadEnv();
-import { supabaseAdmin } from "../lib/supabase";
+import { supabaseAdmin } from "../lib/supabase-admin";
 
 async function main() {
   const s = supabaseAdmin();
