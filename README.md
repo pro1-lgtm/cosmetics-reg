@@ -35,15 +35,27 @@ public/data/detected-changes.json
 public/data/meta.json
 ```
 
-## 빌드·실행 (사용자)
+## 빌드·실행 (사용자) — 더블클릭 한 번
 
+**Windows**: 폴더의 `start.bat` 더블클릭
+**macOS / Linux**: 터미널에서 `./start.sh` (또는 `npm start`)
+
+`scripts/launch.cjs` 가 자동으로:
+1. `node_modules` 없으면 `npm install` (최초 1회)
+2. `out/` 없으면 `npm run build` (최초 1회 또는 코드 변경 시)
+3. `http://localhost:3010` 에 정적 서버 띄움
+4. 기본 브라우저 자동 진입
+5. `Ctrl+C` 또는 창 닫기로 종료
+
+**전제조건**: Node.js LTS (https://nodejs.org). 그 외 자격증명 0.
+
+수동 실행 (개발자):
 ```bash
 npm install
-npm run build          # out/ 디렉토리
-npm run serve          # http://localhost:3010
+npm run build && npm run serve   # http://localhost:3010
+# 또는
+npm run dev                       # next dev (HMR)
 ```
-
-개발 서버: `npm run dev` (Next.js HMR)
 
 ## 데이터 갱신 (운영자 — Gemini + 식약처 API 인터넷 필요)
 

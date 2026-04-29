@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "serve": "npx --yes serve out -l 3010",
+    "start": "node scripts/launch.cjs",
     "lint": "eslint",
     "crawl": "tsx scripts/crawlers/run.ts",
     "crawl:kr": "tsx scripts/crawlers/run.ts KR",
