@@ -27,16 +27,16 @@ interface SourcePdfRow {
   content_hash: string;
 }
 
-// EUR-Lex PDF URL 다수 시도 — 첫 번째 성공한 것만 유지.
+// EUR-Lex PDF URL — original 32009R1223 + consolidated 02009R1223 둘 다 시도.
 const SOURCES = [
   {
     key: "eu_eurlex_1223_consolidated_pdf",
-    title: "EU Cosmetic Products Regulation 1223/2009 (consolidated PDF)",
+    title: "EU Cosmetic Products Regulation 1223/2009 (PDF)",
     candidates: [
-      "https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=CELEX:02009R1223-20240817",
+      "https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=CELEX:32009R1223",
+      "https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=CELEX:32009R1223&from=EN",
       "https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=CELEX:02009R1223-20240817&from=EN",
       "https://eur-lex.europa.eu/eli/reg/2009/1223/oj/eng/pdf",
-      "https://eur-lex.europa.eu/eli/reg/2009/1223/oj/eng/pdfa1a",
     ],
     country: "EU",
     lang: "en",
@@ -57,9 +57,9 @@ async function main() {
     const ctx = await launchContext({ acceptLang: "en-GB,en;q=0.9" });
     let saved = false;
     try {
-      // EUR-Lex 의 PDF URL 가 redirect/202 인 경우 있어 페이지로 먼저 navigate (cookie 받기) 후 request
+      // EUR-Lex 페이지 warmup — main regulation page 로 cookie + 202 wait
       try {
-        await ctx.page.goto("https://eur-lex.europa.eu/", { waitUntil: "domcontentloaded", timeout: 30_000 });
+        await ctx.page.goto("https://eur-lex.europa.eu/eli/reg/2009/1223/oj/eng", { waitUntil: "networkidle", timeout: 60_000 });
       } catch {}
       for (const url of s.candidates) {
         console.log(`▶ ${s.country} try: ${url}`);
