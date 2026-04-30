@@ -14,6 +14,7 @@
     "parse": "tsx scripts/parsers/run.ts",
     "parse:us": "tsx scripts/parsers/run.ts US",
     "enrich:functions": "tsx scripts/enrich-functions.ts",
+    "enrich:manual": "tsx scripts/manual-enrich.ts",
     "mfds:ingest": "tsx scripts/mfds/ingest.ts",
     "us:ingest": "tsx scripts/fetchers/us-ecfr.ts",
     "cn:iecic": "tsx scripts/fetchers/cn-nmpa-iecic.ts",
