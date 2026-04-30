@@ -1,7 +1,22 @@
 {
   "asean_Annex-II_Release_29102019.pdf": {
     "sha256": "b392fc6c8b53b966e108db7fd8f285a5ffccfd33fd986459659de1f7788f5b06",
-    "parsed_at": "2026-04-30T06:51:03.863Z",
+    "parsed_at": "2026-04-30T07:03:58.567Z",
     "entry_count": 1389
+  },
+  "asean_Annex-IV-part-1-release-3-May-2018-201801.pdf": {
+    "sha256": "367205c4011709146ec15c2ae1fa8642e539025274c20fe5a8eae39751f27d46",
+    "parsed_at": "2026-04-30T07:03:58.567Z",
+    "entry_count": 144
+  },
+  "asean_Annex-VI-Part-1_Release_03102019.pdf": {
+    "sha256": "439575b0d77fd2c94aac24b8053eff2aff8679a8163f11d02ddeaf0256b20359",
+    "parsed_at": "2026-04-30T07:03:58.567Z",
+    "entry_count": 61
+  },
+  "asean_Annex-VII_Release_29102019.pdf": {
+    "sha256": "2962eacede50aeff837c3e1e1b9f8f4d508069aea18221e0b5f4fced8e8e3b31",
+    "parsed_at": "2026-04-30T07:03:58.567Z",
+    "entry_count": 32
   }
 }

@@ -213,96 +213,99 @@ function parseAnnexII(text: string): Entry[] {
   return out;
 }
 
-// Annex III — multi-column 표. ref 단순 정수, 자식 a/b/c 변형 (1a, 1b, 2 ...).
-function parseAnnexIII(text: string): Entry[] {
+// Annex III/VI/VII — multi-row 표. ref 가 라인 시작에 (1, 1a, 2, ...) + 공백 + 본문.
+// 두 ref 사이가 한 entry 영역.
+function parseRefBasedAnnex(text: string, headerPattern: RegExp): Entry[] {
   const out: Entry[] = [];
-  // 패턴: "<ref>\n[See also ...]\n<substance>...\nCAS No <cas>"
-  const headerIdx = text.search(/Ref No[\s\S]{0,200}Substance/i);
+  const headerIdx = text.search(headerPattern);
   if (headerIdx < 0) return out;
   const body = text.slice(headerIdx);
-  // ref 패턴: ^\s*(\d{1,3}[a-z]?)\s*$ (단독 ref token in line)
-  const refRe = /(?:^|\n)\s*(\d{1,3}[a-z]?)\s*(?=\n)/g;
+  // ref 패턴: 라인 시작 + 1~3자리 숫자 (+ 옵션 a/b/c) + 공백 또는 줄바꿈
+  const refRe = /(?:^|\n)\s*(\d{1,3}[a-z]?)(?=\s|$)/g;
   const positions: { ref: string; pos: number }[] = [];
   let m;
   while ((m = refRe.exec(body))) {
     positions.push({ ref: m[1], pos: m.index + (m[0].length - m[1].length) });
   }
-  // sequential validation — 1, 1a, 1b, 2, 2a, 3, 3a, 3b, 4...
+  // sequential validation
   const valid: { ref: string; pos: number }[] = [];
   let lastBaseNum = 0;
   for (const p of positions) {
     const baseNum = Number(p.ref.replace(/[a-z]$/, ""));
     if (lastBaseNum === 0 && baseNum === 1) { valid.push(p); lastBaseNum = baseNum; }
-    else if (baseNum === lastBaseNum || baseNum === lastBaseNum + 1) {
+    else if (baseNum === lastBaseNum || (baseNum > lastBaseNum && baseNum - lastBaseNum <= 3)) {
       valid.push(p); lastBaseNum = baseNum;
     }
   }
   for (let i = 0; i < valid.length; i++) {
     const cur = valid[i];
     const next = valid[i + 1];
-    const block = body.slice(cur.pos + cur.ref.length, next?.pos ?? body.length);
-    const casM = block.match(/CAS No\s*([\d/–-]+(?:-\d)*)/i) ?? block.match(/(\d{1,7}-\d{2,4}-\d)/);
-    const cas = casM?.[1]?.match(/\d{1,7}-\d{2,4}-\d/)?.[0] ?? null;
-    // substance = ref 직후부터 CAS 또는 첫 column break 까지
-    let substance = block.slice(0, casM?.index ?? Math.min(300, block.length)).replace(/\s+/g, " ").trim();
-    substance = substance.replace(/See also \d+[a-z]?/gi, "").replace(/\s+/g, " ").trim();
-    if (!substance || substance.length < 3 || substance.length > 400) continue;
+    const block = body.slice(cur.pos + cur.ref.length, next?.pos ?? body.length).slice(0, 1500);
+    const casMatches = [...block.matchAll(/(\d{1,7}-\d{2,4}-\d)/g)];
+    const cas = casMatches[0]?.[1] ?? null;
+    // substance = block 시작부터 CAS 또는 첫 큰 break (줄바꿈 2회) 까지
+    let substanceEnd = casMatches[0]?.index ?? -1;
+    if (substanceEnd < 0) {
+      // CAS 없으면 첫 250 chars 까지
+      substanceEnd = Math.min(250, block.length);
+    }
+    let substance = block.slice(0, substanceEnd)
+      .replace(/CAS No\.?/gi, " ")
+      .replace(/\(\s*CAS\s*\)/gi, " ")
+      .replace(/See also \d+[a-z]?/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    // 첫 (와 ) 사이 footnote 제거 시 substance 의미 손실 가능 — 보존
+    if (!substance || substance.length < 3 || substance.length > 300) continue;
     const letters = (substance.match(/[A-Za-z]/g) ?? []).length;
     if (letters < 5) continue;
-    // max concentration — % 추출
+    // % 농도 추출
     const concM = block.match(/(\d+(?:\.\d+)?)\s*%/);
     const maxConc = concM ? Number(concM[1]) : null;
-    // conditions — 짧게
     const conditions = block.replace(/\s+/g, " ").trim().slice(0, 500);
     out.push({ inci: substance, cas, ref: cur.ref, max_concentration: maxConc, conditions });
   }
   return out;
 }
 
-// Annex IV/VI/VII 는 더 단순한 표. CI 번호 또는 INCI 명+CAS+조건. 공통 함수.
-function parsePositiveListAnnex(text: string, code: "IV" | "VI" | "VII"): Entry[] {
+// Annex IV (Colorants positive list) — CI 번호 5자리 + 색깔 + field of application.
+// 패턴: `<5자리CI> [(footnote)] <Color> [X X X X] [other limitations]`
+function parseAnnexIV(text: string): Entry[] {
   const out: Entry[] = [];
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  // 패턴: 라인 단위로 INCI/CI 명 + CAS or % 후처리
-  for (const line of lines) {
-    // CI 번호: "CI 12085" 또는 "75100"
-    const ci = line.match(/\bCI\s*\d{4,5}\b/i)?.[0];
-    const cas = line.match(/(\d{1,7}-\d{2,4}-\d)/)?.[1] ?? null;
-    if (!ci && !cas) continue;
-    // substance = line 에서 CI/CAS/% 제외
-    let substance = line
-      .replace(/\bCI\s*\d{4,5}\b/gi, " ")
-      .replace(/\d{1,7}-\d{2,4}-\d/g, " ")
-      .replace(/\d+(?:\.\d+)?\s*%/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    // CI 번호가 명시된 경우 substance가 빈 경우 CI 번호를 substance 로 사용
-    if (!substance && ci) substance = ci;
-    if (!substance || substance.length < 3 || substance.length > 200) continue;
-    const letters = (substance.match(/[A-Za-z]/g) ?? []).length;
-    if (letters < 3) continue;
-    const concM = line.match(/(\d+(?:\.\d+)?)\s*%/);
+  const colors = "Green|Yellow|Orange|Red|Brown|Black|Blue|Violet|White";
+  const re = new RegExp(
+    `(?:^|\\n)\\s*(\\d{5})\\s*(?:\\(\\d+\\))?\\s+(${colors})\\b([^\\n]{0,200})`,
+    "gim",
+  );
+  let m;
+  const seen = new Set<string>();
+  while ((m = re.exec(text))) {
+    const ci = m[1];
+    if (seen.has(ci)) continue;
+    seen.add(ci);
+    const color = m[2];
+    const tail = m[3] ?? "";
+    const concM = tail.match(/(\d+(?:\.\d+)?)\s*%/);
+    const conditions = `Color: ${color}.${tail.trim() ? ` ${tail.replace(/\s+/g, " ").trim().slice(0, 250)}` : ""}`;
     out.push({
-      inci: substance, cas, ref: null,
+      inci: `CI ${ci}`,
+      cas: null,
+      ref: ci,
       max_concentration: concM ? Number(concM[1]) : null,
-      conditions: line.length > 50 ? line.slice(0, 300) : null,
+      conditions,
     });
   }
-  // dedupe (substance lower)
-  const seen = new Set<string>();
-  return out.filter((e) => {
-    const k = `${e.inci.toLowerCase()}|${e.cas ?? ""}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
+  return out;
 }
 
 function parseAnnex(text: string, code: AnnexSpec["code"]): Entry[] {
   const cleaned = cleanText(text);
   if (code === "II") return parseAnnexII(cleaned);
-  if (code === "III") return parseAnnexIII(cleaned);
-  return parsePositiveListAnnex(cleaned, code);
+  if (code === "III") return parseRefBasedAnnex(cleaned, /Ref No[\s\S]{0,200}Substance/i);
+  if (code === "IV") return parseAnnexIV(cleaned);
+  if (code === "VI") return parseRefBasedAnnex(cleaned, /Reference[\s\S]{0,150}Substance/i);
+  if (code === "VII") return parseRefBasedAnnex(cleaned, /Reference[\s\S]{0,150}Substance|UV filters/i);
+  return [];
 }
 
 async function main() {
