@@ -17,6 +17,13 @@ const MAPPING: Record<string, string[]> = {
   "브라질": ["BR"],
   "아르헨티나": ["AR"],
   "캐나다": ["CA"],
+  // Andean Community (Comunidad Andina) — Decisión 833 으로 EU 규제 + FDA list 동시 채택.
+  "콜롬비아": ["CO"],
+  "에콰도르": ["EC"],
+  "페루": ["PE"],
+  "볼리비아": ["BO"],
+  "안데스": ["CO", "EC", "PE", "BO"],
+  "안데스공동체": ["CO", "EC", "PE", "BO"],
 };
 
 const warned = new Set<string>();

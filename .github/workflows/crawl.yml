@@ -128,6 +128,11 @@ jobs:
         run: npm run eu:parse
         continue-on-error: true
 
+      # Andean Community (CO/EC/PE/BO) Decisión 833 — EU 규제 채택. EU parse 직후 fanout.
+      - name: Fanout EU 1차 → Andean Community 4국 (CO/EC/PE/BO)
+        run: npm run andean:fanout
+        continue-on-error: true
+
       - name: Try BR ANVISA cosmetics index
         run: npm run fetch:try -- BR "https://www.gov.br/anvisa/pt-br/assuntos/cosmeticos" br_anvisa_index
         continue-on-error: true
