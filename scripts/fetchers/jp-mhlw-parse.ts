@@ -140,6 +140,116 @@ function parseAmountTable(text: string, sectionName: string, status: "restricted
   return out;
 }
 
+// Appendix 2 §2: 카테고리(rinse-off / leave-on / mucosa-area / toothpaste 등)별 제한.
+// 한 줄에 "<ingredient> Prohibited" 또는 "<ingredient> N.NN g" 인 inline 패턴, 그리고
+// 두 줄에 걸친 "<ingredient>\nProhibited" 또는 "<ingredient>\nN.NN g" 패턴 둘 다 처리.
+// 카테고리는 별도 row 로 분리하지 않고 ingredient 단위로 압축. 단, 동일 (name, status,
+// amount) 쌍은 dedupe.
+function parseAppendix2Section2(text: string): ParsedItem[] {
+  const out: ParsedItem[] = [];
+  const lines = text.split(/\r?\n/).map((l) => l.trim());
+  // 카테고리 헤더로 보이는 라인 (skip + ingredient pendingName 무효화)
+  const isCategory = (s: string) =>
+    /^(Cosmetics|Aerosol|Compounds|Hair setting|Toothpaste|use such|immediately|containing|added |only |for purposes|emulsifying|to be used|with the purpose|amount of bee|exclude those|include those)/i.test(s);
+  let pendingName = "";
+  const pushItem = (name: string, status: "banned" | "restricted", amount: number | null, unit: string) => {
+    const cleaned = name.replace(/\s+/g, " ").trim();
+    if (cleaned.length < 3) return;
+    if (!/^[A-Za-z0-9(]/.test(cleaned)) return;
+    if (isCategory(cleaned)) return;
+    out.push({
+      name: cleaned,
+      status,
+      max_concentration: amount,
+      conditions:
+        status === "banned"
+          ? "JP MHLW 化粧品基準 別表 2 §2 — 특정 화장품 카테고리(rinse-off / leave-on / mucosa / toothpaste 등)에서 사용 금지."
+          : `JP MHLW 化粧品基準 別表 2 §2 — 특정 화장품 카테고리에서 최대 ${amount}${unit}.`,
+    });
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    if (/^--|^\d+\s*$|^Ingredient name|^Maximum amount|^[0-9]+\.\s/.test(line)) {
+      pendingName = "";
+      continue;
+    }
+    if (isCategory(line)) {
+      pendingName = "";
+      continue;
+    }
+    // inline "<name> Prohibited"
+    const inlineProhib = line.match(/^(.+?)\s+Prohibited\s*$/i);
+    if (inlineProhib) {
+      pushItem(inlineProhib[1].trim(), "banned", null, "");
+      pendingName = "";
+      continue;
+    }
+    // inline "<name> 0.30g" or "<name> 0.30 g" or "<name> 50000 IU as total"
+    const inlineAmount = line.match(/^(.+?)\s+([0-9]+(?:\.[0-9]+)?)\s*(g|ｇ|%|IU)(?:\s+as\s+total)?\s*$/i);
+    if (inlineAmount) {
+      pushItem(inlineAmount[1].trim(), "restricted", Number(inlineAmount[2]), inlineAmount[3]);
+      pendingName = "";
+      continue;
+    }
+    // standalone "Prohibited"
+    if (/^Prohibited$/i.test(line)) {
+      if (pendingName) pushItem(pendingName, "banned", null, "");
+      pendingName = "";
+      continue;
+    }
+    // standalone amount
+    const standaloneAmt = line.match(/^([0-9]+(?:\.[0-9]+)?)\s*(g|ｇ|%|IU)(?:\s+as\s+total)?\b/i);
+    if (standaloneAmt) {
+      if (pendingName) pushItem(pendingName, "restricted", Number(standaloneAmt[1]), standaloneAmt[2]);
+      pendingName = "";
+      continue;
+    }
+    // ingredient 후보로 누적 (영문 시작)
+    if (/^[A-Z(]/.test(line)) pendingName = line;
+  }
+  // dedupe (name, status, amount)
+  const seen = new Set<string>();
+  return out.filter((it) => {
+    const k = `${it.name.toLowerCase()}|${it.status}|${it.max_concentration ?? ""}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+// Appendix 2 §3: 3-column 표. 각 row = "<ingredient> <c1> <c2> [<c3>]" — c1=rinse-off,
+// c2=leave-on (mucosa 비사용), c3=mucosa 가능. ○ = 무제한, blank = 사용 금지.
+// 정책: 가장 strict 카테고리 (mucosa 가능) 의 농도가 있으면 그 수치로, 없으면
+// leave-on 수치로 max_concentration 결정. mucosa 사용 가능 여부는 conditions 에 명시.
+function parseAppendix2Section3(text: string): ParsedItem[] {
+  const out: ParsedItem[] = [];
+  const lines = text.split(/\r?\n/);
+  for (const raw of lines) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    if (/^--|^\d+\s*$|^Ingredient name|^Maximum amount|^Cosmetics |^be |^for |^washed|^[0-9]+\.\s|^\(\*/.test(trimmed)) continue;
+    // pattern: <name> <c1> <c2> [<c3>] — 각 column 은 ○ 또는 0.XX
+    const m = trimmed.match(/^(.+?)\s+([○]|[0-9]+(?:\.[0-9]+)?)\s+([○]|[0-9]+(?:\.[0-9]+)?)(?:\s+([○]|[0-9]+(?:\.[0-9]+)?))?\s*$/);
+    if (!m) continue;
+    const name = m[1].replace(/\s*\(\*\d+\)\s*/g, "").trim();
+    if (name.length < 3) continue;
+    if (!/^[A-Za-z]/.test(name)) continue;
+    const c1 = m[2], c2 = m[3], c3 = m[4] || "";
+    const fmt = (v: string) => (v === "○" ? "무제한" : v === "" ? "사용 금지" : `${v}g/100g`);
+    const cond =
+      `JP MHLW 化粧品基準 別表 2 §3 — 카테고리별 제한. ` +
+      `washed-away rinse-off ${fmt(c1)}, ` +
+      `leave-on (mucosa 비사용) ${fmt(c2)}, ` +
+      `mucosa 사용 ${fmt(c3)}.`;
+    // strictest 농도: mucosa column 우선, 없으면 leave-on
+    const pickAmount = (v: string) => (v === "○" || v === "" ? null : Number(v));
+    const amount = c3 ? pickAmount(c3) : pickAmount(c2);
+    out.push({ name, status: "restricted", max_concentration: amount, conditions: cond });
+  }
+  return out;
+}
+
 async function main() {
   const startedAt = Date.now();
   console.log(`▶ JP MHLW 化粧品基準 PDF 파싱 (${PDF_EN_PATH})...`);
@@ -151,21 +261,32 @@ async function main() {
   const app3 = getSection(text, "Appendix 3", "Appendix 4");
   const app4 = getSection(text, "Appendix 4", "(*1)");
 
-  // Appendix 2 Section 1 (all types, 단순 single-amount) — "1. The ingredients restricted in all types"
-  // 다음 ~ "2. The ingredients restricted according to types" 직전.
+  // Appendix 2 §1/§2/§3 분리. 헤더 패턴은 "1. The ingredients restricted in all types",
+  // "2. The ingredients restricted according to types or intended purposes",
+  // "3. The ingredients restricted according to types of cosmetics".
   const app2sec1 = (() => {
     const a = app2.indexOf("1. The ingredients restricted in all types");
     const b = app2.indexOf("2. The ingredients restricted according to types");
     return a >= 0 && b > a ? app2.slice(a, b) : "";
   })();
+  const app2sec2 = (() => {
+    const a = app2.indexOf("2. The ingredients restricted according to types");
+    const b = app2.indexOf("3. The ingredients restricted according to types");
+    return a >= 0 && b > a ? app2.slice(a, b) : "";
+  })();
+  const app2sec3 = (() => {
+    const a = app2.indexOf("3. The ingredients restricted according to types");
+    return a >= 0 ? app2.slice(a) : "";
+  })();
 
-  const items: ParsedItem[] = [
-    ...parseAppendix1(app1),
-    ...parseAmountTable(app2sec1, "JP MHLW 化粧品基準 別表 2 §1 (Appendix 2 §1 — restricted in all types)", "restricted"),
-    ...parseAmountTable(app3, "JP MHLW 化粧品基準 別表 3 (Appendix 3 — preservatives positive list)", "listed"),
-    ...parseAmountTable(app4, "JP MHLW 化粧品基準 別表 4 (Appendix 4 — UV absorbers positive list)", "listed"),
-  ];
-  console.log(`  parsed: Appendix 1=${parseAppendix1(app1).length}, A2§1=${parseAmountTable(app2sec1, "test", "restricted").length}, A3=${parseAmountTable(app3, "test", "listed").length}, A4=${parseAmountTable(app4, "test", "listed").length}, total ${items.length}`);
+  const a1 = parseAppendix1(app1);
+  const a2s1 = parseAmountTable(app2sec1, "JP MHLW 化粧品基準 別表 2 §1 (Appendix 2 §1 — restricted in all types)", "restricted");
+  const a2s2 = parseAppendix2Section2(app2sec2);
+  const a2s3 = parseAppendix2Section3(app2sec3);
+  const a3 = parseAmountTable(app3, "JP MHLW 化粧品基準 別表 3 (Appendix 3 — preservatives positive list)", "listed");
+  const a4 = parseAmountTable(app4, "JP MHLW 化粧品基準 別表 4 (Appendix 4 — UV absorbers positive list)", "listed");
+  const items: ParsedItem[] = [...a1, ...a2s1, ...a2s2, ...a2s3, ...a3, ...a4];
+  console.log(`  parsed: A1=${a1.length}, A2§1=${a2s1.length}, A2§2=${a2s2.length}, A2§3=${a2s3.length}, A3=${a3.length}, A4=${a4.length}, total ${items.length}`);
 
   const ingredients = await readRows<IngredientRow>("ingredients");
   const byInciLower = new Map<string, IngredientRow>();
@@ -227,7 +348,7 @@ async function main() {
   await updateMeta({ ingredients: ingredients.length, regulations: finalRegs.length });
 
   console.log(`\n=== summary (${((Date.now()-startedAt)/1000).toFixed(1)}s) ===`);
-  console.log(`  JP MHLW (Appendix 1+3+4): ${newRegs.length} rows (priority 100)`);
+  console.log(`  JP MHLW (Appendix 1 + 2§1/§2/§3 + 3 + 4): ${newRegs.length} rows (priority 100)`);
   console.log(`  ingredients: ${ingredients.length}, regulations: ${finalRegs.length}`);
 }
 

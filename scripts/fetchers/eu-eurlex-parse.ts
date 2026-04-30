@@ -102,13 +102,36 @@ function parseAnnexRows(sectionText: string): AnnexEntry[] {
     // 합리적 ref 범위만 (Annex II ~1700, Annex III ~350)
     if (n >= 1 && n <= 2000) positions.push({ ref: n, pos: m.index + (m[0].length - String(m[1]).length - 1) });
   }
-  // sequential ref 만 keep — 1, 2, 3, ... 순차 violations 제거
+  // sequential ref 만 keep. 시작점 = 3개 연속 +1 sequence + 각 block substance 정상.
+  // Annex IV/VI 첫 페이지가 회전된 column 텍스트라 글자 분리 garbage(short alphabet
+  // tokens)가 ref 후보로 잡힘 — substance length/alphabet 비율 검증으로 거부.
+  // 결과: II/III/V 는 ref=1, IV 는 ref=9(1~8 회전 페이지 갇힘), VI 는 ref=15(1~14).
+  const blockOk = (i: number) => {
+    const cur = positions[i];
+    const next = positions[i + 1];
+    const block = cleaned.slice(cur.pos, next?.pos ?? cleaned.length);
+    const body = block.replace(/^\s*\d+\s+/, "").trim();
+    const letters = (body.match(/[A-Za-z]/g) ?? []).length;
+    return body.length >= 30 && letters >= 15;
+  };
+  let startIdx = -1;
+  for (let i = 0; i < positions.length - 2; i++) {
+    const a = positions[i], b = positions[i + 1], c = positions[i + 2];
+    if (b.ref === a.ref + 1 && c.ref === b.ref + 1 && a.ref >= 1 && a.ref <= 30 &&
+        blockOk(i) && blockOk(i + 1) && blockOk(i + 2)) {
+      startIdx = i;
+      break;
+    }
+  }
   const filtered: { ref: number; pos: number }[] = [];
-  let lastRef = 0;
-  for (const p of positions) {
-    if (p.ref === lastRef + 1 || (lastRef === 0 && p.ref === 1) || (filtered.length > 0 && p.ref > lastRef && p.ref - lastRef < 5)) {
-      filtered.push(p);
-      lastRef = p.ref;
+  if (startIdx >= 0) {
+    let lastRef = 0;
+    for (let i = startIdx; i < positions.length; i++) {
+      const p = positions[i];
+      if (lastRef === 0 || p.ref === lastRef + 1 || (p.ref > lastRef && p.ref - lastRef < 5)) {
+        filtered.push(p);
+        lastRef = p.ref;
+      }
     }
   }
   for (let i = 0; i < filtered.length; i++) {
