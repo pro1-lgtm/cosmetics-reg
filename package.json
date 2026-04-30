@@ -30,6 +30,7 @@
     "br:anvisa": "tsx scripts/fetchers/br-anvisa.ts",
     "jp:mhlw": "tsx scripts/fetchers/jp-mhlw.ts",
     "jp:parse": "tsx scripts/fetchers/jp-mhlw-parse.ts",
+    "jp:annex1": "tsx scripts/fetchers/jp-mhlw-annex1-parse.ts",
     "tw:tfda": "tsx scripts/fetchers/tw-tfda.ts",
     "sources:seed": "tsx scripts/sources/seed.ts",
     "e2e": "tsx scripts/e2e-verify.ts",

@@ -98,6 +98,12 @@ jobs:
         run: npm run jp:parse
         continue-on-error: true
 
+      # JP MHLW 別表 1 (品目ごと承認対象成分 positive list, ~2643 종) — 105 page PDF.
+      # 정규식 직접 (Gemini 0). 카테고리 (1)~(11) × 성분 매트릭스 → JP regulations.
+      - name: Parse JP MHLW 別表 1 (品目ごと承認対象成分 positive list)
+        run: npm run jp:annex1
+        continue-on-error: true
+
       - name: Refresh TW TFDA preservative-restricted list
         run: npm run tw:tfda
         continue-on-error: true
