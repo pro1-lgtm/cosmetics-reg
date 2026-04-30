@@ -124,8 +124,13 @@ async function main() {
   const sourceVersion = `TFDA-${now.slice(0, 10)}`;
 
   // 1. 모든 TFDA 행 제거 (이전 잘못된 status 데이터 정리)
+  // 과거 fetcher 가 BASE_DOC prefix 없이 생성한 stale source_document 까지 잡으려고
+  // "TFDA" substring 으로 확장. country_code=TW 의 모든 우리 source 도 함께 정리.
   const existingRegs = await readRows<RegulationRow>("regulations");
-  const otherSources = existingRegs.filter((r) => !r.source_document.includes(BASE_DOC));
+  const otherSources = existingRegs.filter((r) =>
+    !r.source_document.includes(BASE_DOC) &&
+    !r.source_document.startsWith("TFDA "),
+  );
   console.log(`▶ TFDA 5 카테고리 fetch (기존 TFDA rows ${existingRegs.length - otherSources.length} 삭제)`);
 
   const newRegs: RegulationRow[] = [];
