@@ -188,7 +188,12 @@ async function main() {
   await ensureData();
   ensureBuilt();
 
-  const server = spawnCmd("npx", ["--yes", "serve", "out", "-l", String(PORT), "-L"], {
+  // serve 는 devDependency. node_modules/.bin/serve 직접 실행 — npx registry 조회 0,
+  // 오프라인 환경 (첫 npm install 후) 에서도 즉시 시작.
+  const serveBin = isWin
+    ? path.join(ROOT, "node_modules", ".bin", "serve.cmd")
+    : path.join(ROOT, "node_modules", ".bin", "serve");
+  const server = spawnCmd(serveBin, ["out", "-l", String(PORT), "-L"], {
     stdio: ["ignore", "ignore", "inherit"],
   });
 
