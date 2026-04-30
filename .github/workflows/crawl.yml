@@ -42,6 +42,12 @@ jobs:
         run: npm run us:ingest
         continue-on-error: true
 
+      # US 색소 positive list (Part 73 Subpart C 인증면제 + Part 74 Subpart C 인증요구)
+      # + California AB 2762 (24 banned, 2025-01-01 발효).
+      - name: Refresh US 21 CFR 73/74 Subpart C 색소 + California AB 2762
+        run: npm run us:colors
+        continue-on-error: true
+
       - name: Install Playwright Chromium for fetcher
         run: npx playwright install --with-deps chromium
 

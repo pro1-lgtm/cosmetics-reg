@@ -17,6 +17,7 @@
     "enrich:manual": "tsx scripts/manual-enrich.ts",
     "mfds:ingest": "tsx scripts/mfds/ingest.ts",
     "us:ingest": "tsx scripts/fetchers/us-ecfr.ts",
+    "us:colors": "tsx scripts/fetchers/us-cfr-colors-ab2762.ts",
     "cn:iecic": "tsx scripts/fetchers/cn-nmpa-iecic.ts",
     "ca:hotlist": "tsx scripts/fetchers/ca-hotlist.ts",
     "fetch:try": "tsx scripts/fetchers/generic-playwright.ts",
