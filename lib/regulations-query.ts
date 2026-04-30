@@ -6,6 +6,20 @@ import { dataset, type Ingredient, type KciaArticle, type SourcePdf } from "./da
 export type LookupSource = "verified" | "pending" | "not_found";
 export type RegulationType = "negative_list" | "positive_list" | "hybrid";
 
+// 같은 country 에 cascade fallback (1안→2안→3안) 으로 여러 source 가 쌓일 수 있음.
+// 메인 status 는 priority desc 첫번째(1차) 기준. all_sources 는 보조 출처 포함 전체 목록.
+export interface SourceRef {
+  source_document: string | null;
+  source_url: string | null;
+  source_priority: number | null;  // 100=공식 1차, 80=KCIA Gemini auto, 50=MFDS 등
+  status: "banned" | "restricted" | "allowed" | "listed" | "not_listed" | string | null;
+  max_concentration: number | null;
+  concentration_unit: string | null;
+  conditions: string | null;
+  last_verified_at: string | null;
+  confidence_score: number | null;
+}
+
 export interface CountryLookupResult {
   country_code: string;
   country_name_ko: string;
@@ -18,6 +32,7 @@ export interface CountryLookupResult {
   conditions?: string | null;
   source_url?: string | null;
   source_document?: string | null;
+  source_priority?: number | null;  // 메인 source 의 priority (UI 가 cascade 단계 표시)
   confidence_score?: number | null;
   last_verified_at?: string;
   pending_reason?: string;
@@ -25,6 +40,7 @@ export interface CountryLookupResult {
   override_note?: string | null;
   kcia_articles?: KciaArticle[];
   source_pdfs?: SourcePdf[];
+  all_sources?: SourceRef[];  // priority desc 정렬 — 모든 출처 (1안+2안+3안)
 }
 
 export interface IngredientMatch {
@@ -110,14 +126,32 @@ export async function lookupRegulation(
     if (!country) continue;
 
     // bucket 은 priority desc → last_verified desc 로 미리 정렬됨 — [0] 이 1차 우선.
-    let row = regsForIngredient?.get(code)?.[0];
+    const bucket = regsForIngredient?.get(code);
+    let row = bucket?.[0];
+    let allBucket = bucket;
 
     // 상속 fallback (예: VN inherits EU)
     let fromInherit: string | null = null;
     if (!row && country.inherits_from) {
-      row = regsForIngredient?.get(country.inherits_from)?.[0];
-      if (row) fromInherit = country.inherits_from;
+      const inheritedBucket = regsForIngredient?.get(country.inherits_from);
+      row = inheritedBucket?.[0];
+      if (row) {
+        fromInherit = country.inherits_from;
+        allBucket = inheritedBucket;
+      }
     }
+
+    const allSources: SourceRef[] | undefined = allBucket?.map((r) => ({
+      source_document: r.source_document,
+      source_url: r.source_url,
+      source_priority: r.source_priority,
+      status: r.status,
+      max_concentration: r.max_concentration,
+      concentration_unit: r.concentration_unit,
+      conditions: r.conditions,
+      last_verified_at: r.last_verified_at,
+      confidence_score: r.confidence_score,
+    }));
 
     // KCIA 보조 자료 — country별 최근 5건만 전달 (협회 회원 자료 link)
     const kciaArticles = ds.kciaByCountry.get(code)?.slice(0, 5);
@@ -137,12 +171,14 @@ export async function lookupRegulation(
         conditions: row.conditions,
         source_url: row.source_url,
         source_document: row.source_document,
+        source_priority: row.source_priority,
         confidence_score: row.confidence_score,
         last_verified_at: row.last_verified_at,
         inherits_from: fromInherit,
         override_note: row.override_note,
         kcia_articles: kciaArticles,
         source_pdfs: sourcePdfs,
+        all_sources: allSources,
       });
       continue;
     }

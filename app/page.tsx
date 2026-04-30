@@ -333,6 +333,26 @@ const STATUS_STYLE: Record<string, { label: string; className: string }> = {
   },
 };
 
+// cascade fallback 단계 표시 — 1안(공식)/2안(KCIA)/3안(MFDS) 시각 구분.
+// priority 100=공식 1차, 80=KCIA Gemini auto, 그 외=MFDS·기타 보조.
+function SourceTier({ priority }: { priority: number | null }) {
+  let tier = "3차";
+  let title = "MFDS·기타 보조 자료";
+  let className = "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400";
+  if (priority != null && priority >= 100) {
+    tier = "1차"; title = "해당국 공식 기관 사이트";
+    className = "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200";
+  } else if (priority != null && priority >= 70) {
+    tier = "2차"; title = "KCIA(한국 화장품 협회) — 1안 차단/부재 시 fallback";
+    className = "bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-200";
+  }
+  return (
+    <span title={title} className={`inline-block rounded px-1 py-px text-[10px] font-medium ${className}`}>
+      {tier}
+    </span>
+  );
+}
+
 function CountryCard({ result }: { result: CountryLookupResult }) {
   return (
     <article className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
@@ -381,7 +401,54 @@ function CountryCard({ result }: { result: CountryLookupResult }) {
             </details>
           )}
           {result.source_document && (
-            <div className="text-[11px] text-zinc-400">출처: {result.source_document}</div>
+            <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
+              <span className="text-zinc-400">출처</span>{" "}
+              <SourceTier priority={result.source_priority ?? null} />
+              {result.source_url ? (
+                <a
+                  href={result.source_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="ml-1 underline decoration-dotted hover:text-zinc-900 dark:hover:text-zinc-100"
+                >
+                  {result.source_document}
+                </a>
+              ) : (
+                <span className="ml-1">{result.source_document}</span>
+              )}
+            </div>
+          )}
+          {result.all_sources && result.all_sources.length > 1 && (
+            <details className="text-[11px] text-zinc-500 dark:text-zinc-400">
+              <summary className="cursor-pointer hover:text-zinc-800 dark:hover:text-zinc-200">
+                추가 출처 {result.all_sources.length - 1}건 보기 (cascade fallback)
+              </summary>
+              <ul className="mt-1.5 space-y-1 pl-2">
+                {result.all_sources.slice(1).map((s, i) => (
+                  <li key={i} className="border-l border-zinc-200 pl-2 dark:border-zinc-700">
+                    <SourceTier priority={s.source_priority} />
+                    {s.source_url ? (
+                      <a
+                        href={s.source_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="ml-1 underline decoration-dotted hover:text-zinc-900 dark:hover:text-zinc-100"
+                      >
+                        {s.source_document ?? "(출처)"}
+                      </a>
+                    ) : (
+                      <span className="ml-1">{s.source_document ?? "(출처)"}</span>
+                    )}
+                    {s.status && (
+                      <span className="ml-1.5 text-zinc-400">— {STATUS_STYLE[s.status]?.label ?? s.status}</span>
+                    )}
+                    {typeof s.max_concentration === "number" && (
+                      <span className="ml-1 text-zinc-400">{s.max_concentration}{s.concentration_unit ?? "%"}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </details>
           )}
         </div>
       )}
