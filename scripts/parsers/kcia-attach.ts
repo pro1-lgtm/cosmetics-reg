@@ -19,8 +19,23 @@ import { readRows, writeRows, updateMeta } from "../../lib/json-store";
 
 const FINGERPRINT_FILE = "public/data/kcia-attach-fingerprints.json";
 const SOURCE_PREFIX = "KCIA Gemini auto-parsed";
-const KNOWN_PARSER_HANDLED_NOS = new Set(["14208"]); // 정확도 우선 — known parser 가 처리
 const MODEL = "gemini-2.5-flash";
+
+// Cascade fallback 정책 (1안 → 2안 → 3안):
+//   1안: 각국 공식 기관 사이트 (Open API/직접 fetch) — 우선
+//   2안: KCIA — 1안 차단/실패한 자료만 fallback
+//   3안: MFDS — 최후 보조
+//
+// 아래 SKIP 리스트는 1안 fetcher 가 이미 cover 하는 KCIA 게시물.
+// 1안 정확도 우선 — KCIA 의 보조 자료 중복 제외.
+const KNOWN_PARSER_HANDLED_NOS = new Set([
+  "14208",  // CN 안전기술규범 → cn-nmpa-safety.ts (KCIA xlsx 정확 parser)
+  "16818",  // CN IECIC 별표1 (기사용화장품원료목록) → cn-nmpa-iecic.ts (1안 NIFDC API)
+  "17544",  // CN IECIC 신원료 등재 공고 → cn-nmpa-iecic.ts 매일 갱신
+  "17548",  // CN NMPA 화장품용 생물기술 유래 원료 통칙 → cn:iecic 와 중복 가능
+  "17553",  // CN 염모 화장품 기술 지도원칙 → 가이드라인
+  "17554",  // CN 염모 화장품 기술 지도원칙 Q&A → 가이드라인
+]);
 
 interface KciaAttachment {
   filename: string;
