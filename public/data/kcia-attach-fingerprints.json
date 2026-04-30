@@ -1,0 +1,44 @@
+{
+  "public\\data\\raw-attach\\kcia-16818\\별표1.「기사용화장품원료목록」Ⅰ(국문).xlsx": {
+    "sha256": "6c002d8c6a600d0be5395f5c64ebee51f6cf994172039f977149ed81bee1df96",
+    "parsed_at": "2026-04-30T05:28:47.570Z",
+    "entry_count": 0,
+    "article_no": "16818"
+  },
+  "public\\data\\raw-attach\\kcia-15088\\DECISIÓN 833.pdf": {
+    "sha256": "6f01bd5df33c8b84e5428071c7597d5bea190a4999a6d2d4ddd09098eb6fa6f9",
+    "parsed_at": "2026-04-30T05:28:47.570Z",
+    "entry_count": 0,
+    "article_no": "15088"
+  },
+  "public\\data\\raw-attach\\kcia-15088\\D516 to D833 changes.pdf": {
+    "sha256": "c13ea3e10e1f679534536e26f1887d394ba8e1414c9dbbfd8c2d37df4300f935",
+    "parsed_at": "2026-04-30T05:28:47.570Z",
+    "entry_count": 0,
+    "article_no": "15088"
+  },
+  "public\\data\\raw-attach\\kcia-15087\\브라질 규정 링크 모음 From 브라질협회.pdf": {
+    "sha256": "f78fd92a7173fb2a20efea66f805f6f2a09f4ab21a21b096cd9e778d3f9ab707",
+    "parsed_at": "2026-04-30T05:28:47.570Z",
+    "entry_count": 0,
+    "article_no": "15087"
+  },
+  "public\\data\\raw-attach\\kcia-14264\\미국 자외선차단제 명령제안 주요내용(21_1130).pdf": {
+    "sha256": "8d3796bf8213ca502ffbdd2e006e0be1cffb7e9e98c3b0029f5e49de3550c517",
+    "parsed_at": "2026-04-30T05:28:47.570Z",
+    "entry_count": 16,
+    "article_no": "14264"
+  },
+  "public\\data\\raw-attach\\kcia-14195\\Q&A- FDA posts deemed final order and proposed order for over-the-counter sunscreen 국문번역본-1.pdf": {
+    "sha256": "84d0a62bfc534f5b629b95f259ab4dd1bb397e370f344d7ddec199ab202ebed6",
+    "parsed_at": "2026-04-30T05:28:47.570Z",
+    "entry_count": 16,
+    "article_no": "14195"
+  },
+  "public\\data\\raw-attach\\kcia-14195\\Q&A- FDA posts deemed final order and proposed order for over-the-counter sunscreen.pdf": {
+    "sha256": "864775cf3c9d602b9a332c702124c45f894227b771b66b00a641549ff4293e93",
+    "parsed_at": "2026-04-30T05:28:47.570Z",
+    "entry_count": 16,
+    "article_no": "14195"
+  }
+}

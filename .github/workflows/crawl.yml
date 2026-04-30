@@ -63,6 +63,15 @@ jobs:
         run: npm run cn:safety
         continue-on-error: true
 
+      # KCIA 게시물의 PDF/xlsx 첨부 Gemini 자동 파싱 — 14208 외 모든 게시물.
+      # SHA256 fingerprint 비교 → 변경된 첨부만 처리.
+      # 새 법령(중국·미국·브라질·콜롬비아 등 모든 KCIA 카테고리)이 KCIA 에 올라오면
+      # 자동 발견 → 자동 다운 → Gemini 자동 파싱 → regulations.json 머지.
+      # 무료 tier 안 (일 5 요청 미만 예상).
+      - name: Parse KCIA 첨부 (Gemini 자동 — 14208 외 모든 게시물)
+        run: npm run kcia:parse
+        continue-on-error: true
+
       - name: Refresh JP MHLW PDFs (auto download + hash diff)
         run: npm run jp:mhlw
         continue-on-error: true
