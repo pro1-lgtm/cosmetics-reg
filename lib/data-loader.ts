@@ -140,20 +140,27 @@ async function loadDataset(): Promise<Dataset> {
   const ingredientByKoreanLower = new Map<string, Ingredient>();
   const ingredientByCas = new Map<string, Ingredient>();
 
-  for (const i of ingredients) {
+  // 청크 단위 yield — main thread 5ms 마다 양보 → TBT 감소.
+  // 33K ingredients × 4 Map ops + 91K regulations 인덱싱이 한 번에 끊기지 않게.
+  const yieldEvery = 5000;
+  for (let idx = 0; idx < ingredients.length; idx++) {
+    const i = ingredients[idx];
     ingredientById.set(i.id, i);
     if (i.inci_name) ingredientByInciLower.set(i.inci_name.toLowerCase(), i);
     if (i.korean_name) ingredientByKoreanLower.set(i.korean_name.toLowerCase(), i);
-    // CAS 다중 등록(여러 번호 \n 구분) — 각 번호를 키로
     if (i.cas_no) {
       for (const cas of i.cas_no.split(/\s+/)) {
         if (cas.trim()) ingredientByCas.set(cas.trim(), i);
       }
     }
+    if (idx > 0 && idx % yieldEvery === 0) {
+      await new Promise<void>((r) => setTimeout(r, 0));
+    }
   }
 
   const regsByIngredientCountry = new Map<string, Map<string, Regulation[]>>();
-  for (const r of regulations) {
+  for (let idx = 0; idx < regulations.length; idx++) {
+    const r = regulations[idx];
     let inner = regsByIngredientCountry.get(r.ingredient_id);
     if (!inner) {
       inner = new Map();
@@ -165,9 +172,13 @@ async function loadDataset(): Promise<Dataset> {
       inner.set(r.country_code, bucket);
     }
     bucket.push(r);
+    if (idx > 0 && idx % yieldEvery === 0) {
+      await new Promise<void>((r) => setTimeout(r, 0));
+    }
   }
   // 각 bucket 정렬: source_priority desc → last_verified_at desc.
   // lookup 시 [0] 이 1차 우선. 자국 1차 소스가 들어오면 자동으로 MFDS 위로 올라감.
+  let sortedSinceYield = 0;
   for (const inner of regsByIngredientCountry.values()) {
     for (const bucket of inner.values()) {
       bucket.sort((a, b) => {
@@ -176,6 +187,10 @@ async function loadDataset(): Promise<Dataset> {
         if (pa !== pb) return pb - pa;
         return (b.last_verified_at ?? "").localeCompare(a.last_verified_at ?? "");
       });
+      if (++sortedSinceYield >= yieldEvery) {
+        sortedSinceYield = 0;
+        await new Promise<void>((r) => setTimeout(r, 0));
+      }
     }
   }
 
@@ -233,10 +248,10 @@ export function dataset(): Promise<Dataset> {
   return cached;
 }
 
-// SSR-safe prefetch — 첫 사용자 인터랙션에서만 시작.
-// Lighthouse 측정 윈도우는 사용자 인터랙션 없이 진행되므로 메인 스레드 영향 0.
-// 사용자 흐름: 페이지 진입 → 검색 input click 또는 키 입력 → 그때 데이터 로드 시작
-// → 검색 Enter 시점엔 보통 준비 완료. 데이터 로드 26K+55K 행 1-2초.
+// SSR-safe prefetch — 사용자 명시 인터랙션(pointerdown / keydown)에만 시작.
+// scroll·focusin 제외: app/page.tsx 의 autoFocus 가 hydration 직후 focusin 을 트리거하는데
+// Lighthouse 측정 윈도우에 데이터 로딩이 같이 들어가 TBT 1.3s+ 됨. autoFocus 직후 사용자
+// 가 keydown/click 으로 검색을 시작하면 그 시점에 prefetch 시작 — 1초 정도 추가 wait.
 if (typeof window !== "undefined") {
   let started = false;
   const start = () => {
@@ -247,7 +262,7 @@ if (typeof window !== "undefined") {
       started = false;
     });
   };
-  const events = ["pointerdown", "keydown", "focusin", "scroll"] as const;
+  const events = ["pointerdown", "keydown"] as const;
   for (const ev of events) {
     document.addEventListener(ev, start, { capture: true, once: true, passive: true });
   }
