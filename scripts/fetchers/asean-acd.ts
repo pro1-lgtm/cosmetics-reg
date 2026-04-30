@@ -227,13 +227,20 @@ function parseRefBasedAnnex(text: string, headerPattern: RegExp): Entry[] {
   while ((m = refRe.exec(body))) {
     positions.push({ ref: m[1], pos: m.index + (m[0].length - m[1].length) });
   }
-  // sequential validation
+  // sequential validation — Annex III/VI/VII 모두 monotonic 증가 (단 Annex III 는
+  // 큰 gap 있음, e.g. 1→8→95→102). 따라서 strict gap≤3 대신 monotonic 만 요구.
   const valid: { ref: string; pos: number }[] = [];
-  let lastBaseNum = 0;
+  let lastBaseNum = -1;
   for (const p of positions) {
     const baseNum = Number(p.ref.replace(/[a-z]$/, ""));
-    if (lastBaseNum === 0 && baseNum === 1) { valid.push(p); lastBaseNum = baseNum; }
-    else if (baseNum === lastBaseNum || (baseNum > lastBaseNum && baseNum - lastBaseNum <= 3)) {
+    if (baseNum < 1 || baseNum > 999) continue;
+    // 첫 ref 는 1 또는 작은 숫자에서 시작
+    if (lastBaseNum === -1) {
+      if (baseNum <= 5) { valid.push(p); lastBaseNum = baseNum; }
+      continue;
+    }
+    // 같은 baseNum 의 letter variant (e.g. 1a 다음 1b) 또는 monotonic 증가
+    if (baseNum === lastBaseNum || baseNum > lastBaseNum) {
       valid.push(p); lastBaseNum = baseNum;
     }
   }

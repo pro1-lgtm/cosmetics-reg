@@ -18,5 +18,10 @@
     "sha256": "2962eacede50aeff837c3e1e1b9f8f4d508069aea18221e0b5f4fced8e8e3b31",
     "parsed_at": "2026-04-30T07:03:58.567Z",
     "entry_count": 32
+  },
+  "asean_Annex-III-Part-I_Release_29102019.pdf": {
+    "sha256": "781788fdb8759aa1c5eee6c50aa2b47a0d561eac612c0c69021cf3e827b01622",
+    "parsed_at": "2026-04-30T07:37:51.799Z",
+    "entry_count": 214
   }
 }
