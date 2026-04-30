@@ -26,6 +26,7 @@
     "cn:safety": "tsx scripts/fetchers/cn-nmpa-safety.ts",
     "kcia:parse": "tsx scripts/parsers/kcia-attach.ts",
     "asean:acd": "tsx scripts/fetchers/asean-acd.ts",
+    "br:anvisa": "tsx scripts/fetchers/br-anvisa.ts",
     "jp:mhlw": "tsx scripts/fetchers/jp-mhlw.ts",
     "jp:parse": "tsx scripts/fetchers/jp-mhlw-parse.ts",
     "tw:tfda": "tsx scripts/fetchers/tw-tfda.ts",

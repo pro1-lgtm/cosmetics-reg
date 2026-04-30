@@ -72,6 +72,18 @@ jobs:
         run: npm run kcia:parse
         continue-on-error: true
 
+      # ASEAN Cosmetic Directive — 6국 (VN/TH/ID/MY/PH/SG) fanout. 1차 출처.
+      # PDF 자동 다운로드 + 정규식 직접 파싱 (Gemini 의존 0).
+      - name: Parse ASEAN ACD Annex II/III/IV/VI/VII (6국 fanout)
+        run: npm run asean:acd
+        continue-on-error: true
+
+      # BR ANVISA RDC — KCIA 15087 zip 첨부에서 RDC PDF 자동 추출 + 파싱.
+      # RDC 83 (banned) + 03 (restricted) + 29 (preservatives) + 628 (colorants) + 600 (UV).
+      - name: Parse BR ANVISA RDC (KCIA zip 경유)
+        run: npm run br:anvisa
+        continue-on-error: true
+
       - name: Refresh JP MHLW PDFs (auto download + hash diff)
         run: npm run jp:mhlw
         continue-on-error: true
