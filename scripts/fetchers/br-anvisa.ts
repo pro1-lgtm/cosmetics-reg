@@ -30,29 +30,43 @@ interface RdcSpec {
   function_category: string | null;
   description: string;
   parser: "ref-cas" | "positive-list";
+  // Mercosul 결의 채택분 — BR ANVISA RDC = AR ANMAT Disposición 동일 list.
+  // BR 만 채택한 것은 ["BR"], Mercosul 공통은 ["BR", "AR"].
+  countries: string[];
+  mercosul_basis: string | null;
 }
 
 const RDCS: RdcSpec[] = [
   { filename: "RDC_83_2016 (배합금지 성분 목록).pdf",
     status: "banned", function_category: null,
-    description: "RDC 83/2016 — 배합금지 성분 목록 (MERCOSUL 62/2014)",
-    parser: "ref-cas" },
+    description: "RDC 83/2016 — 배합금지 성분 목록",
+    parser: "ref-cas",
+    countries: ["BR", "AR"],
+    mercosul_basis: "MERCOSUL GMC 62/2014" },
   { filename: "RDC_03_2012 (배합한도 제한 성분 목록).pdf",
     status: "restricted", function_category: null,
     description: "RDC 03/2012 — 배합한도 제한 성분 목록",
-    parser: "ref-cas" },
+    parser: "ref-cas",
+    countries: ["BR", "AR"],
+    mercosul_basis: "MERCOSUL GMC 24/2011" },
   { filename: "RDC_29_2012 (허용 보존제 목록).pdf",
     status: "listed", function_category: "보존제",
     description: "RDC 29/2012 — 허용 보존제 목록 (positive list)",
-    parser: "positive-list" },
+    parser: "positive-list",
+    countries: ["BR", "AR"],
+    mercosul_basis: "MERCOSUL GMC 23/2011" },
   { filename: "RDC_628_2022 (개인위생 제품, 화장품 및 향수의 허용 착색물질 목록).pdf",
     status: "listed", function_category: "색소",
     description: "RDC 628/2022 — 허용 착색물질 (positive list)",
-    parser: "positive-list" },
+    parser: "positive-list",
+    countries: ["BR"],
+    mercosul_basis: null },
   { filename: "RDC_600_2022 (개인 위생용품, 화장품 및 향수 제품에 허용되는 자외선 필터 목록).pdf",
     status: "listed", function_category: "자외선차단제",
     description: "RDC 600/2022 — 허용 자외선 필터 목록 (positive list)",
-    parser: "positive-list" },
+    parser: "positive-list",
+    countries: ["BR"],
+    mercosul_basis: null },
 ];
 
 interface IngredientRow {
@@ -260,8 +274,13 @@ async function main() {
       continue;
     }
 
-    const sourceDoc = `${SOURCE_PREFIX} — ${rdc.description}`;
-    sourceDocsToReplace.add(sourceDoc);
+    const rdcId = rdc.description.match(/RDC \d+\/\d{4}/)?.[0] ?? rdc.description;
+    const brSourceDoc = `${SOURCE_PREFIX} — ${rdc.description}`;
+    sourceDocsToReplace.add(brSourceDoc);
+    const arSourceDoc = rdc.mercosul_basis
+      ? `ANMAT Argentina — ${rdc.mercosul_basis} (BR ANVISA ${rdcId} 동일 채택)`
+      : null;
+    if (arSourceDoc) sourceDocsToReplace.add(arSourceDoc);
     let created = 0;
     for (const e of entries) {
       let ing = byInci.get(e.inci.toLowerCase());
@@ -278,23 +297,29 @@ async function main() {
         if (e.cas) byCas.set(e.cas, ing);
         created++;
       } else if (!ing.cas_no && e.cas) ing.cas_no = e.cas;
-      const conditionsText = [
-        `${rdc.description} 등재.`,
-        e.ref ? `Ref: ${e.ref}` : null,
-        e.cas ? `CAS: ${e.cas}` : null,
-        `출처: KCIA 15087 첨부(브라질 규정 원문 zip).`,
-      ].filter(Boolean).join("\n");
-      newRegs.push({
-        ingredient_id: ing.id, country_code: "BR", status: rdc.status,
-        max_concentration: e.max_concentration, concentration_unit: "%",
-        product_categories: rdc.function_category ? [rdc.function_category] : [],
-        conditions: conditionsText,
-        source_url: "https://kcia.or.kr/home/law/law_05.php?type=view&no=15087",
-        source_document: sourceDoc,
-        source_version: rdc.filename.match(/\d{4}/)?.[0] ?? "2022",
-        source_priority: 100, last_verified_at: now,
-        confidence_score: 1.0, override_note: null,
-      });
+      for (const cc of rdc.countries) {
+        const isMercosulFanout = cc !== "BR" && rdc.mercosul_basis !== null;
+        const conditionsText = [
+          `${rdc.description} 등재.`,
+          isMercosulFanout
+            ? `Mercosul 결의 ${rdc.mercosul_basis} — Argentina ANMAT 동일 채택.`
+            : (rdc.mercosul_basis ? `Mercosul 결의 ${rdc.mercosul_basis} 채택.` : null),
+          e.ref ? `Ref: ${e.ref}` : null,
+          e.cas ? `CAS: ${e.cas}` : null,
+          `출처: KCIA 15087 첨부(브라질 규정 원문 zip).`,
+        ].filter(Boolean).join("\n");
+        newRegs.push({
+          ingredient_id: ing.id, country_code: cc, status: rdc.status,
+          max_concentration: e.max_concentration, concentration_unit: "%",
+          product_categories: rdc.function_category ? [rdc.function_category] : [],
+          conditions: conditionsText,
+          source_url: "https://kcia.or.kr/home/law/law_05.php?type=view&no=15087",
+          source_document: cc === "BR" ? brSourceDoc : (arSourceDoc ?? brSourceDoc),
+          source_version: rdc.filename.match(/\d{4}/)?.[0] ?? "2022",
+          source_priority: 100, last_verified_at: now,
+          confidence_score: 1.0, override_note: null,
+        });
+      }
     }
     totalEntries += entries.length;
     totalCreated += created;
@@ -303,7 +328,14 @@ async function main() {
   }
 
   const existingRegs = await readRows<RegulationRow>("regulations");
-  const filteredRegs = existingRegs.filter((r) => !sourceDocsToReplace.has(r.source_document));
+  // 이전 run 에서 다른 prefix·suffix 로 저장된 stale 행도 함께 제거.
+  // BR ANVISA RDC 와 AR ANMAT MERCOSUL 채택분 모두.
+  const filteredRegs = existingRegs.filter((r) => {
+    if (sourceDocsToReplace.has(r.source_document)) return false;
+    if (r.source_document.startsWith(`${SOURCE_PREFIX} — RDC `)) return false;
+    if (r.source_document.startsWith("ANMAT Argentina — MERCOSUL ")) return false;
+    return true;
+  });
   const finalRegs = [...filteredRegs, ...newRegs];
 
   await writeRows("ingredients", ingredients);
@@ -312,10 +344,13 @@ async function main() {
   writeFileSync(FINGERPRINT_FILE, JSON.stringify(fingerprints, null, 2));
 
   const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+  const byCountry = newRegs.reduce<Record<string, number>>((a, r) => {
+    a[r.country_code] = (a[r.country_code] ?? 0) + 1; return a;
+  }, {});
   console.log(`\n=== summary (${elapsed}s) ===`);
   console.log(`  처리 ${totalProcessed} RDC / skip ${totalSkipped}`);
   console.log(`  entries ${totalEntries} (new ingredients ${totalCreated})`);
-  console.log(`  BR regulations 추가: ${newRegs.length}`);
+  console.log(`  regulations 추가: ${newRegs.length} — ${Object.entries(byCountry).map(([k,v]) => `${k}:${v}`).join(", ")}`);
   console.log(`  ingredients: ${ingredients.length}, regulations: ${finalRegs.length}`);
 }
 
