@@ -29,11 +29,13 @@ interface RdcSpec {
   status: "banned" | "restricted" | "listed";
   function_category: string | null;
   description: string;
-  parser: "ref-cas" | "positive-list" | "color-index";
+  parser: "ref-cas" | "positive-list" | "color-index" | "hair-active" | "hand-list";
   // Mercosul 결의 채택분 — BR ANVISA RDC = AR ANMAT Disposición 동일 list.
   // BR 만 채택한 것은 ["BR"], Mercosul 공통은 ["BR", "AR"].
   countries: string[];
   mercosul_basis: string | null;
+  // hand-list parser 가 사용할 entries (RDC 645 등 4개 substance hardcode 케이스).
+  hand_list?: { inci: string; cas: string; status: "banned" | "restricted"; conditions: string }[];
 }
 
 const RDCS: RdcSpec[] = [
@@ -67,6 +69,31 @@ const RDCS: RdcSpec[] = [
     parser: "positive-list",
     countries: ["BR"],
     mercosul_basis: null },
+  // IN 220/2023 — hair straightener/wave active 허용 list. ANVISA Instrução Normativa.
+  // 표 형식: Nº | 포르투갈어 이름 | INCI (대문자, 콤마 구분) | 농도 | 경고 | 기타.
+  { filename: "RDC_220_2023 (헤어 스트레이트 또는 웨이브용 화장품에 허용되는 활성제 목록).pdf",
+    status: "listed", function_category: "헤어 스트레이트너",
+    description: "IN 220/2023 — 헤어 스트레이트/웨이브 허용 활성제 (positive list)",
+    parser: "hair-active",
+    countries: ["BR"],
+    mercosul_basis: null },
+  // RDC 645/2022 — 4 substances 사용 조건 (Mercosul GMC 48/2010).
+  { filename: "RDC_645_2022 (납, 아세테이트, 포름알데히드, 파라포름알데히드 및 피로갈롤의 사용 조건).pdf",
+    status: "restricted", function_category: null,
+    description: "RDC 645/2022 — 납·포름알데히드·피로갈롤 사용 조건",
+    parser: "hand-list",
+    countries: ["BR", "AR"],
+    mercosul_basis: "MERCOSUL GMC 48/2010",
+    hand_list: [
+      { inci: "Lead acetate", cas: "301-04-2", status: "banned",
+        conditions: "RDC 645/2022 — 화장품 사용 금지. 헤어다이 carbon-based progressive hair colour 등 모든 화장품 적용." },
+      { inci: "Formaldehyde", cas: "50-00-0", status: "restricted",
+        conditions: "RDC 645/2022 — 0.2% 한도 (총 free formaldehyde). nail hardener 5%. spray 에어로졸 사용 금지." },
+      { inci: "Paraformaldehyde", cas: "30525-89-4", status: "restricted",
+        conditions: "RDC 645/2022 — formaldehyde 와 동일 사용 조건 (0.2% 한도). spray 에어로졸 사용 금지." },
+      { inci: "Pyrogallol", cas: "87-66-1", status: "banned",
+        conditions: "RDC 645/2022 — 화장품 사용 금지. 2023-06-30 까지 RDC 15/2013 기준 등록 제품 sell-through 허용." },
+    ] },
 ];
 
 interface IngredientRow {
@@ -107,6 +134,7 @@ interface Entry {
   ref: string | null;
   max_concentration: number | null;
   conditions: string | null;
+  status?: "banned" | "restricted" | "listed";   // hand-list 에서 entry 별 override
 }
 
 async function ensureUnzipped(): Promise<void> {
@@ -270,6 +298,58 @@ function parsePositiveList(text: string): Entry[] {
   });
 }
 
+// IN 220/2023 — 헤어 스트레이트/웨이브 활성제 positive list. INCI 가 별도 열에 대문자.
+// 형식: Nº (1-N) + 포르투갈어 이름 + INCI list (콤마 구분 대문자) + 농도 + 경고 + 기타.
+// 각 row 의 INCI list 를 split → 각 INCI 별 entry 발급. 농도 추출.
+function parseHairActive(text: string): Entry[] {
+  const out: Entry[] = [];
+  const cleaned = cleanText(text);
+  const lines = cleaned.split(/\r?\n/);
+  // header 식별: ANEXO + LISTA DE ATIVOS 까지 skip
+  let bodyStart = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (/LISTA DE ATIVOS PERMITIDOS/i.test(lines[i])) { bodyStart = i; break; }
+  }
+  const body = lines.slice(bodyStart).join("\n");
+  // ord block split — Nº 라인 단독 1, 2, 3, ... (RDC 220 entries 약 5-10).
+  const ordRe = /(?:^|\n)\s*(\d{1,3})\s*(?=\n)/g;
+  const positions: { ord: number; pos: number }[] = [];
+  let m;
+  while ((m = ordRe.exec(body))) {
+    const n = Number(m[1]);
+    if (n >= 1 && n <= 99) positions.push({ ord: n, pos: m.index + (m[0].length - String(n).length) });
+  }
+  for (let i = 0; i < positions.length; i++) {
+    const cur = positions[i];
+    const next = positions[i + 1];
+    const block = body.slice(cur.pos, next?.pos ?? body.length);
+    // INCI 추출 — uppercase substring (16+ chars 영문 + 공백/콤마/&)
+    const inciSect = block.match(/([A-Z][A-Z0-9\s,&\-/.]{15,})/g);
+    if (!inciSect) continue;
+    // 가장 긴 uppercase 영역이 INCI list
+    const longest = inciSect.reduce((a, b) => (b.length > a.length ? b : a), "");
+    const inciTokens = longest
+      .split(/[,\n]/)
+      .map((t) => t.trim())
+      .filter((t) => t.length >= 4 && t.length <= 100 && /[A-Z]/.test(t));
+    if (inciTokens.length === 0) continue;
+    // 농도 — 첫 % 또는 pH
+    const concM = block.match(/(\d+(?:[,.]\d+)?)\s*%/);
+    const maxConc = concM ? Number(concM[1].replace(",", ".")) : null;
+    for (const inci of inciTokens) {
+      out.push({ inci, cas: null, ref: String(cur.ord), max_concentration: maxConc, conditions: null });
+    }
+  }
+  // dedupe
+  const seen = new Set<string>();
+  return out.filter((e) => {
+    const k = e.inci.toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
 // RDC 628 — Color Index 5-digit + 색상명(PT) + 컬럼 마커. INCI 포맷: "CI NNNNN".
 function parseColorIndex(text: string): Entry[] {
   const out: Entry[] = [];
@@ -332,13 +412,25 @@ async function main() {
       totalSkipped++;
       continue;
     }
-    const text = await extractText(rdc.filename);
-    const entries =
-      rdc.parser === "ref-cas" ? parseRefCas(text) :
-      rdc.parser === "color-index" ? parseColorIndex(text) :
-      parsePositiveList(text);
-    console.log(`  ${(text.length / 1024).toFixed(0)}KB text → ${entries.length} entries`);
-    if (entries.length < 5) {
+    let entries: Entry[];
+    let textLen = 0;
+    if (rdc.parser === "hand-list") {
+      entries = (rdc.hand_list ?? []).map((h) => ({
+        inci: h.inci, cas: h.cas, ref: null, max_concentration: null,
+        conditions: h.conditions, status: h.status,
+      }));
+    } else {
+      const text = await extractText(rdc.filename);
+      textLen = text.length;
+      entries =
+        rdc.parser === "ref-cas" ? parseRefCas(text) :
+        rdc.parser === "color-index" ? parseColorIndex(text) :
+        rdc.parser === "hair-active" ? parseHairActive(text) :
+        parsePositiveList(text);
+    }
+    console.log(`  ${textLen ? (textLen / 1024).toFixed(0) + "KB text → " : ""}${entries.length} entries`);
+    // hand-list 는 항상 처리 (적은 entries 도 valid). 그 외는 너무 적으면 skip.
+    if (rdc.parser !== "hand-list" && entries.length < 5) {
       console.warn(`  ! 너무 적음 — fingerprint 미저장`);
       continue;
     }
@@ -373,12 +465,13 @@ async function main() {
           isMercosulFanout
             ? `Mercosul 결의 ${rdc.mercosul_basis} — Argentina ANMAT 동일 채택.`
             : (rdc.mercosul_basis ? `Mercosul 결의 ${rdc.mercosul_basis} 채택.` : null),
+          e.conditions ?? null,
           e.ref ? `Ref: ${e.ref}` : null,
           e.cas ? `CAS: ${e.cas}` : null,
           `출처: KCIA 15087 첨부(브라질 규정 원문 zip).`,
         ].filter(Boolean).join("\n");
         newRegs.push({
-          ingredient_id: ing.id, country_code: cc, status: rdc.status,
+          ingredient_id: ing.id, country_code: cc, status: e.status ?? rdc.status,
           max_concentration: e.max_concentration, concentration_unit: "%",
           product_categories: rdc.function_category ? [rdc.function_category] : [],
           conditions: conditionsText,
