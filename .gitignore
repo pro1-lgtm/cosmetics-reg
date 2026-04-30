@@ -39,6 +39,10 @@ yarn-error.log*
 # crawler raw snapshots (uploaded as CI artifacts instead)
 .crawl-raw/
 
+# KCIA 첨부 자동 다운로드 (매 cron 마다 새로 받음. parser 가 즉시 사용 후
+# regulations.json 만 commit. raw 첨부 파일 자체는 git 비대 방지로 제외)
+public/data/raw-attach/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

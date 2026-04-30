@@ -23,6 +23,7 @@
     "eu:pdf": "tsx scripts/fetchers/eu-eurlex-pdf.ts",
     "eu:parse": "tsx scripts/fetchers/eu-eurlex-parse.ts",
     "kcia:articles": "tsx scripts/fetchers/kcia-articles.ts",
+    "cn:safety": "tsx scripts/fetchers/cn-nmpa-safety.ts",
     "jp:mhlw": "tsx scripts/fetchers/jp-mhlw.ts",
     "jp:parse": "tsx scripts/fetchers/jp-mhlw-parse.ts",
     "tw:tfda": "tsx scripts/fetchers/tw-tfda.ts",
@@ -36,6 +37,7 @@
     "pdf-parse": "^2.4.5",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "xlsx": "^0.18.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {

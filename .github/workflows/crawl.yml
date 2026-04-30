@@ -49,8 +49,18 @@ jobs:
         run: npm run cn:iecic
         continue-on-error: true
 
-      - name: Refresh KCIA articles metadata (한국 협회)
+      # KCIA 게시물 metadata + 첨부 자동 다운로드. 14208 안전기술규범 등 비회원
+      # 다운로드 가능 확인됨. 첨부 파일명에 timestamp 포함 → 변경 시 새 파일.
+      # 새 게시물·새 개정공고 첨부도 자동 추가.
+      - name: Refresh KCIA articles + 첨부 자동 다운로드
         run: npm run kcia:articles
+        continue-on-error: true
+
+      # CN NMPA 안전기술규범 — KCIA 14208 한국어 번역본 Excel(7표) 파싱.
+      # 사용금지 + 사용제한 + 준용(positive list 4종) 1733 entries → CN 규제.
+      # KCIA 첨부 자동 다운로드 step 직후 실행.
+      - name: Parse CN NMPA 安全技术规范 (KCIA xlsx)
+        run: npm run cn:safety
         continue-on-error: true
 
       - name: Refresh JP MHLW PDFs (auto download + hash diff)

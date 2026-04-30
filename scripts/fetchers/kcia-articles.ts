@@ -26,7 +26,8 @@ interface KciaArticle {
   attach_hwp: boolean;
   attach_excel: boolean;
   detail_url: string;     // KCIA 게시물 페이지 (사용자 클릭용)
-  body_excerpt?: string | null;  // 본문 한국어 발췌 (회원 로그인 X — 본문 text 만)
+  body_excerpt?: string | null;  // 본문 한국어 발췌 (비회원 본문 text 만)
+  attachments?: KciaAttachment[]; // 비회원 다운로드된 첨부 metadata
 }
 
 // 국가 추론 휴리스틱 — 제목 키워드 매칭
@@ -147,43 +148,98 @@ function parseList(html: string, category: string): KciaArticle[] {
   return articles;
 }
 
-async function fetchDetailBody(detailUrl: string, cookies: Record<string, string>, referer: string): Promise<string | null> {
-  try {
-    const cookieHeader = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
-    const res = await fetch(detailUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0.0.0",
-        "Accept": "text/html,application/xhtml+xml",
-        "Accept-Language": "ko-KR,ko;q=0.9",
-        "Referer": referer,
-        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
-      },
-    });
-    if (!res.ok) return null;
-    const html = await res.text();
-    // sp_title 부터 article 끝 부분까지 추출 후 tag 제거
-    const i = html.indexOf("sp_title");
-    if (i < 0) return null;
-    const region = html.slice(i, i + 12000);
-    let text = region
-      .replace(/<style[\s\S]*?<\/style>/g, "")
-      .replace(/<script[\s\S]*?<\/script>/g, "")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&nbsp;/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, '"')
-      .replace(/\s+/g, " ")
-      .trim();
-    // 본문은 보통 "조회수 NNNN" 다음 ~ "이전글" 또는 "다음글" 직전
-    const startMatch = text.match(/조회수\s*\d+\s*(.+?)(?:이전글|다음글|var page_|function )/);
-    if (startMatch) text = startMatch[1].trim();
-    // 너무 길면 1500자로 자르기
-    return text.length > 1500 ? text.slice(0, 1500) + "..." : text || null;
-  } catch {
-    return null;
+interface KciaAttachment {
+  filename: string;        // 원본 한국어 파일명 (rename param)
+  download_path: string;   // /inc/down.php?dir=... query string 그대로
+  ext: string;             // pdf | xlsx | hwp | docx | etc
+  saved_to: string | null; // public/data/raw-attach/kcia-<no>/<filename>
+  size_bytes: number | null;
+  fetched_at: string | null;
+}
+
+// detail 페이지 HTML 에서 btn_attach 링크 5종 추출 + KCIA 비회원 다운로드.
+// 화장품 성분 규제와 무관한 첨부 (튜토리얼 동영상 링크 등) 는 list 단계에서 거부됨.
+// 같은 게시물의 첨부 파일명에 timestamp 가 들어 있어 파일 변경 시 새 이름이 됨 → 단순 비교로 변경 감지.
+async function fetchAttachments(
+  no: string,
+  detailHtml: string,
+  cookies: Record<string, string>,
+  referer: string,
+  alwaysFresh: boolean,
+): Promise<KciaAttachment[]> {
+  const { mkdirSync, writeFileSync, existsSync, statSync } = await import("node:fs");
+  const path = await import("node:path");
+  const out: KciaAttachment[] = [];
+  const re = /<a\s+href="(\/inc\/down\.php\?[^"]+)"\s+class="btn_attach\s+([a-z]+)"[^>]*>([^<]+)<\/a>/g;
+  const dir = `public/data/raw-attach/kcia-${no}`;
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  let m;
+  const seen = new Set<string>();
+  while ((m = re.exec(detailHtml))) {
+    const downloadPath = m[1].replace(/&amp;/g, "&");
+    const ext = m[2];
+    const filename = m[3].trim();
+    if (seen.has(downloadPath)) continue;
+    seen.add(downloadPath);
+    // 파일명 sanitize (path traversal 차단)
+    const safeName = filename.replace(/[\\/:*?"<>|]/g, "_").slice(0, 200);
+    const savedTo = path.join(dir, safeName);
+    let sizeBytes: number | null = null;
+    let needDownload = alwaysFresh;
+    if (!alwaysFresh && existsSync(savedTo)) {
+      sizeBytes = statSync(savedTo).size;
+    } else {
+      needDownload = true;
+    }
+    if (needDownload) {
+      try {
+        const cookieHeader = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
+        const res = await fetch(`${BASE}${downloadPath}`, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0.0.0",
+            "Accept": "*/*",
+            "Accept-Language": "ko-KR,ko;q=0.9",
+            "Referer": referer,
+            ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+          },
+        });
+        if (res.ok) {
+          const buf = Buffer.from(await res.arrayBuffer());
+          writeFileSync(savedTo, buf);
+          sizeBytes = buf.length;
+          console.log(`    ↓ kcia-${no}/${safeName} (${(buf.length / 1024).toFixed(0)}KB)`);
+        } else {
+          console.warn(`    ✗ ${no}/${safeName}: HTTP ${res.status}`);
+        }
+      } catch (e) {
+        console.warn(`    ✗ ${no}/${safeName}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    out.push({ filename, download_path: downloadPath, ext, saved_to: savedTo, size_bytes: sizeBytes, fetched_at: needDownload ? new Date().toISOString() : null });
+    // KCIA 트래픽 부담 — 첨부 다운로드 사이 0.5s
+    await new Promise((r) => setTimeout(r, 500));
   }
+  return out;
+}
+
+function extractBodyExcerpt(html: string): string | null {
+  const i = html.indexOf("sp_title");
+  if (i < 0) return null;
+  const region = html.slice(i, i + 12000);
+  let text = region
+    .replace(/<style[\s\S]*?<\/style>/g, "")
+    .replace(/<script[\s\S]*?<\/script>/g, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, " ")
+    .trim();
+  const startMatch = text.match(/조회수\s*\d+\s*(.+?)(?:이전글|다음글|var page_|function )/);
+  if (startMatch) text = startMatch[1].trim();
+  return text.length > 1500 ? text.slice(0, 1500) + "..." : text || null;
 }
 
 async function main() {
@@ -221,14 +277,37 @@ async function main() {
   const final = Array.from(unique.values()).filter((a) => isIngredientRegArticle(a.title));
   console.log(`▶ 성분 규제 필터: ${beforeFilter} → ${final.length} (${beforeFilter - final.length} 거부)`);
 
-  // 본문 발췌 자동 추출 (1초 interval — KCIA 부담 최소)
-  console.log(`▶ detail body 추출 (${final.length}건)...`);
+  // 본문 발췌 + 첨부 자동 다운로드 (KCIA 부담 최소화 — 게시물 사이 0.5s)
+  // 첨부는 attach_pdf/hwp/excel 플래그 있는 게시물에 대해서만 다운로드 시도 (비회원 가능 확인됨).
+  console.log(`▶ detail body + 첨부 추출 (${final.length}건)...`);
   for (let i = 0; i < final.length; i++) {
     const a = final[i];
     const referer = a.category === "중국법령"
       ? `${BASE}/home/law/law_09.php`
       : `${BASE}/home/law/law_05.php`;
-    a.body_excerpt = await fetchDetailBody(a.detail_url, cookies, referer);
+    // detail HTML 한 번만 fetch — body + 첨부 둘 다 처리
+    const cookieHeader = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
+    let detailHtml: string | null = null;
+    try {
+      const res = await fetch(a.detail_url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0.0.0",
+          "Accept": "text/html,application/xhtml+xml",
+          "Accept-Language": "ko-KR,ko;q=0.9",
+          "Referer": referer,
+          ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+        },
+      });
+      if (res.ok) detailHtml = await res.text();
+    } catch (e) {
+      console.warn(`  detail fetch 실패 ${a.no}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (detailHtml) {
+      a.body_excerpt = extractBodyExcerpt(detailHtml);
+      if (a.attach_pdf || a.attach_hwp || a.attach_excel) {
+        a.attachments = await fetchAttachments(a.no, detailHtml, cookies, referer, false);
+      }
+    }
     if ((i + 1) % 5 === 0) console.log(`  ${i + 1}/${final.length}`);
     await new Promise((r) => setTimeout(r, 500));
   }
