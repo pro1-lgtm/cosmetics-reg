@@ -57,6 +57,36 @@ function inferCountry(title: string, fallbackCategory: string): string | null {
   return null;
 }
 
+// 성분 규제와 무관한 행정·등록·튜토리얼 자료는 사이트 노출 대상 X.
+// 사이트는 "성분 및 제한·금지" 정보를 제공하는 게 목적이므로 절차·매뉴얼·수수료
+// 글은 사용자 가치 0. 키워드 매칭으로 보수적 거부.
+const NON_INGREDIENT_KEYWORDS = [
+  "Tutorial",
+  "튜토리얼",
+  "사용자 가이드",
+  "사용자가이드",
+  "Cosmetic Direct",
+  "Electronic Drug Registration",
+  "OMUFA",
+  "사용자 수수료",
+  "수수료 프로그램",
+  "OTC Monograph",
+  "User Fee",
+  "등록 자료 관리",
+  "허가, 등록 자료",
+  "허가·등록 자료",
+  "시설등록",
+  "州법 관련 자료집",
+  "州法 관련 자료집",
+];
+
+function isIngredientRegArticle(title: string): boolean {
+  for (const kw of NON_INGREDIENT_KEYWORDS) {
+    if (title.includes(kw)) return false;
+  }
+  return true;
+}
+
 async function fetchListPage(url: string, category: string, cookies: Record<string, string>): Promise<{ html: string; cookies: Record<string, string> }> {
   // GET with cookie + referer
   const cookieHeader = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
@@ -186,7 +216,10 @@ async function main() {
   // 중복 제거 (no 기준)
   const unique = new Map<string, KciaArticle>();
   for (const a of all) if (!unique.has(a.no)) unique.set(a.no, a);
-  const final = Array.from(unique.values());
+  // 성분 규제 외 행정·튜토리얼·수수료 글 거부
+  const beforeFilter = unique.size;
+  const final = Array.from(unique.values()).filter((a) => isIngredientRegArticle(a.title));
+  console.log(`▶ 성분 규제 필터: ${beforeFilter} → ${final.length} (${beforeFilter - final.length} 거부)`);
 
   // 본문 발췌 자동 추출 (1초 interval — KCIA 부담 최소)
   console.log(`▶ detail body 추출 (${final.length}건)...`);
