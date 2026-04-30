@@ -13,10 +13,19 @@ import { readRows, writeRows, updateMeta } from "../../lib/json-store";
 
 // Phase 5b — Supabase 제거. 식약처 API → public/data/*.json 직접 머지.
 // 기존 ingredients 의 function_category / function_description / 다국어명 보존.
-// regulations 는 source_document='MFDS 공공데이터 API' 행만 교체 (다른 source 보존).
+// regulations 는 source_document 가 MFDS_PREFIX 로 시작하는 행만 교체 (다른 source 보존).
 
-const SOURCE_DOC = "MFDS 공공데이터 API";
+const MFDS_PREFIX = "MFDS 공공데이터";
 const SOURCE_URL_BASE = "https://www.data.go.kr/data";
+
+// source_document 명확화 — country 별 분리:
+//   KR: "MFDS 공공데이터 API (식약처 사용제한 원료 직접)"  → 1차 (priority 100)
+//   그 외: "MFDS 공공데이터 — 한국 식약처가 정리한 [국가명] 사용제한 자료" → 3차 (priority 50)
+// 사용자가 UI에서 "이게 한국 정리본인지 해당국 공식 직접인지" 즉시 구분 가능.
+function mfdsSourceDoc(code: string, nameKo: string): string {
+  if (code === "KR") return "MFDS 공공데이터 API (식약처 사용제한 원료 직접)";
+  return `MFDS 공공데이터 — 한국 식약처가 정리한 ${nameKo} 사용제한 자료`;
+}
 
 interface CanonicalIngredient {
   inci_name: string;
@@ -46,6 +55,8 @@ interface CountryRow {
   name_ko: string;
   inherits_from: string | null;
   regulation_type: string;
+  registry_url?: string | null;   // positive_list/hybrid 국가 — 등록 원료 검색 가능 공식 사이트
+  registry_name?: string | null;  // 사이트 표시명 (UI 노출용)
 }
 
 interface RegulationRow {
@@ -211,6 +222,7 @@ function buildRegulationsFromRestriction(
   rows: UseRestrictionItem[],
   idByInci: Map<string, string>,
   sourceVersion: string,
+  countryNameByCode: Map<string, string>,
 ): RegulationRow[] {
   const merged = new Map<string, RegulationRow>();
   const now = new Date().toISOString();
@@ -266,7 +278,7 @@ function buildRegulationsFromRestriction(
           product_categories: [],
           conditions,
           source_url: SOURCE_URL_BASE,
-          source_document: SOURCE_DOC,
+          source_document: mfdsSourceDoc(code, countryNameByCode.get(code) ?? code),
           source_version: sourceVersion,
           source_priority: mfdsSourcePriority(code),
           last_verified_at: now,
@@ -419,11 +431,15 @@ async function main() {
   console.log("▶ [5/5] Building regulations + replacing MFDS rows...");
   const runDate = new Date().toISOString().slice(0, 10);
   const sourceVersion = `MFDS-${runDate}`;
-  const newMfdsRegs = buildRegulationsFromRestriction(restrictions, idByInci, sourceVersion);
+  const countryNameByCode = new Map(countries.map((c) => [c.code, c.name_ko]));
+  const newMfdsRegs = buildRegulationsFromRestriction(restrictions, idByInci, sourceVersion, countryNameByCode);
   if (details.length > 0) enrichRegulationsWithDetail(newMfdsRegs, details, idByInci);
 
   const existingRegs = await readRows<RegulationRow>("regulations");
-  const nonMfds = existingRegs.filter((r) => r.source_document !== SOURCE_DOC);
+  // 모든 MFDS source 행 (이전 단일 SOURCE_DOC + 새 국가별 분리 양식 모두) 제거 후 새로 insert
+  const nonMfds = existingRegs.filter((r) =>
+    r.source_document !== "MFDS 공공데이터 API" && !r.source_document.startsWith(MFDS_PREFIX),
+  );
   const finalRegs = [...nonMfds, ...newMfdsRegs];
   await writeRows("regulations", finalRegs);
   console.log(`  regulations.json: ${finalRegs.length} rows (MFDS ${newMfdsRegs.length} + other-sources ${nonMfds.length})`);

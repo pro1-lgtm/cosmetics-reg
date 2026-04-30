@@ -371,6 +371,23 @@ function CountryCard({ result }: { result: CountryLookupResult }) {
         )}
       </header>
 
+      {/* positive_list / hybrid 국가는 등록 원료 검색 가능 공식 사이트 link 노출.
+          예: CN IECIC, EU CosIng, JP PMDA, ASEAN Cosmetic Directive 등.
+          미등재 원료는 사용 불가이므로 "공식 등록 목록" 출처 명확화가 필수. */}
+      {result.registry_url && (result.regulation_type === "positive_list" || result.regulation_type === "hybrid") && (
+        <div className="mb-2 -mt-1 text-[11px]">
+          <a
+            href={result.registry_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-0.5 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-950/60"
+            title="해당국 공식 등록 원료 목록"
+          >
+            📋 등록 원료 목록 — {result.registry_name ?? "공식 사이트"} ↗
+          </a>
+        </div>
+      )}
+
       {result.source === "verified" && (
         <div className="space-y-2 text-sm">
           {result.status && (

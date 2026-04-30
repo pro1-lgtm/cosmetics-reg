@@ -24,6 +24,8 @@ export interface CountryLookupResult {
   country_code: string;
   country_name_ko: string;
   regulation_type: RegulationType;
+  registry_url?: string | null;
+  registry_name?: string | null;
   source: LookupSource;
   status?: "banned" | "restricted" | "allowed" | "listed" | "not_listed";
   max_concentration?: number | null;
@@ -163,6 +165,8 @@ export async function lookupRegulation(
         country_code: code,
         country_name_ko: country.name_ko,
         regulation_type: country.regulation_type,
+        registry_url: country.registry_url ?? null,
+        registry_name: country.registry_name ?? null,
         source: "verified",
         status: row.status as CountryLookupResult["status"],
         max_concentration: row.max_concentration,
@@ -199,6 +203,8 @@ export async function lookupRegulation(
           country_code: code,
           country_name_ko: country.name_ko,
           regulation_type: country.regulation_type,
+        registry_url: country.registry_url ?? null,
+        registry_name: country.registry_name ?? null,
           source: "pending",
           pending_reason: pendingHit.rejection_reason ?? undefined,
           kcia_articles: kciaArticles,

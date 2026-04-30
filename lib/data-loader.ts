@@ -39,6 +39,8 @@ export interface Country {
   name_ko: string;
   inherits_from: string | null;
   regulation_type: "negative_list" | "positive_list" | "hybrid";
+  registry_url?: string | null;   // positive_list/hybrid: 등록 원료 검색 가능 공식 사이트
+  registry_name?: string | null;
 }
 
 export interface QuarantineRow {
