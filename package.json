@@ -19,6 +19,7 @@
     "us:ingest": "tsx scripts/fetchers/us-ecfr.ts",
     "us:colors": "tsx scripts/fetchers/us-cfr-colors-ab2762.ts",
     "cn:iecic": "tsx scripts/fetchers/cn-nmpa-iecic.ts",
+    "cn:iecic-kcia": "tsx scripts/fetchers/cn-iecic-kcia.ts",
     "ca:hotlist": "tsx scripts/fetchers/ca-hotlist.ts",
     "fetch:try": "tsx scripts/fetchers/generic-playwright.ts",
     "eu:pdf": "tsx scripts/fetchers/eu-eurlex-pdf.ts",

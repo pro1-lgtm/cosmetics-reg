@@ -55,6 +55,12 @@ jobs:
         run: npm run cn:iecic
         continue-on-error: true
 
+      # CN IECIC 2025-04-13 update (KCIA 16818 별표 xlsx) — 8935 ingredient × chinese_name.
+      # Playwright IECIC fetcher 와 coexist — chinese_name 보강 + 신규 ingredient 만 add.
+      - name: CN IECIC 2025 한국어 번역본 (KCIA 16818) — chinese_name 보강
+        run: npm run cn:iecic-kcia
+        continue-on-error: true
+
       # KCIA 게시물 metadata + 첨부 자동 다운로드. 14208 안전기술규범 등 비회원
       # 다운로드 가능 확인됨. 첨부 파일명에 timestamp 포함 → 변경 시 새 파일.
       # 새 게시물·새 개정공고 첨부도 자동 추가.
