@@ -114,10 +114,10 @@ async function fetchJson<T>(path: string): Promise<T> {
 }
 
 async function loadDataset(): Promise<Dataset> {
-  const [metaPayload, ingPayload, regPayload, ctyPayload, quarPayload, kciaPayload, srcPdfPayload] = await Promise.all([
+  // regulations 는 country 별 분할 — countries.json 먼저 받고 나서 각 cc 의 regulations 병렬 fetch.
+  const [metaPayload, ingPayload, ctyPayload, quarPayload, kciaPayload, srcPdfPayload] = await Promise.all([
     fetchJson<Meta>("/data/meta.json"),
     fetchJson<{ rows: Ingredient[] }>("/data/ingredients.json"),
-    fetchJson<{ rows: Regulation[] }>("/data/regulations.json"),
     fetchJson<{ rows: Country[] }>("/data/countries.json"),
     fetchJson<{ rows: QuarantineRow[] }>("/data/quarantine.json"),
     fetchJson<{ rows: KciaArticle[] }>("/data/kcia-articles.json").catch(() => ({ rows: [] })),
@@ -125,9 +125,15 @@ async function loadDataset(): Promise<Dataset> {
   ]);
 
   const ingredients = ingPayload.rows;
-  const regulations = regPayload.rows;
   const countries = ctyPayload.rows;
   const quarantine = quarPayload.rows;
+
+  const regPayloads = await Promise.all(
+    countries.map((c) =>
+      fetchJson<{ rows: Regulation[] }>(`/data/regulations/${c.code}.json`).catch(() => ({ rows: [] })),
+    ),
+  );
+  const regulations: Regulation[] = regPayloads.flatMap((p) => p.rows);
 
   const ingredientById = new Map<string, Ingredient>();
   const ingredientByInciLower = new Map<string, Ingredient>();
