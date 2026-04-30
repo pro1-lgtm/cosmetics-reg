@@ -35,17 +35,22 @@ interface RegulationRow {
 async function main() {
   const startedAt = Date.now();
   const all = await readRows<RegulationRow>("regulations");
-  // EU 1차 source 만 fanout. priority 100 + EU country.
+  // EU 1차 source. priority 100 + EU country.
   const euPrimary = all.filter(
     (r) => r.country_code === "EU" && r.source_priority === 100 && r.source_document.startsWith("EU EUR-Lex"),
   );
-  console.log(`▶ EU 1차 regulations: ${euPrimary.length} → Andean Community 4국 fanout`);
+  // US 1차 source. priority 100 + US country + FDA/CFR/AB2762 등 federal·state 모두.
+  // Andean Decisión 833 art. 4 가 "FDA list 채택" 명시 — US 1차 fanout.
+  const usPrimary = all.filter(
+    (r) => r.country_code === "US" && r.source_priority === 100,
+  );
+  console.log(`▶ EU 1차: ${euPrimary.length}, US 1차: ${usPrimary.length} → Andean 4국 fanout`);
 
   const now = new Date().toISOString();
   const newRegs: RegulationRow[] = [];
+  // EU fanout
   for (const eu of euPrimary) {
     for (const cc of ANDEAN_COUNTRIES) {
-      // EU source_document 은 단일이라 Annex 식별 불가. conditions 의 "Annex N" 텍스트 활용.
       const annexMatch = (eu.conditions ?? "").match(/Annex\s+([IVX]+)/);
       const annexLabel = annexMatch ? `Annex ${annexMatch[1]}` : "Annex";
       const sourceDoc = `${ANDEAN_NAMES[cc]} — Comunidad Andina Decisión 833 (EU 1223/2009 ${annexLabel} 채택)`;
@@ -61,12 +66,32 @@ async function main() {
       });
     }
   }
-  console.log(`  fanout: ${newRegs.length} (${euPrimary.length} × ${ANDEAN_COUNTRIES.length})`);
+  // US fanout — federal CFR + state (CA AB 2762)
+  for (const us of usPrimary) {
+    // US source_document 에서 sub-법령 분리: 21 CFR / California AB / etc.
+    const usLabel = us.source_document
+      .replace(/^US FDA /, "")
+      .replace(/^California /, "California ")
+      .slice(0, 80);
+    for (const cc of ANDEAN_COUNTRIES) {
+      const sourceDoc = `${ANDEAN_NAMES[cc]} — Comunidad Andina Decisión 833 (US ${usLabel} 채택)`;
+      newRegs.push({
+        ...us,
+        country_code: cc,
+        conditions: [
+          us.conditions ?? "",
+          `Comunidad Andina Decisión 833 (Article 4-5) — Food & Drug Administration (FDA) 화장품 list 채택. CO/EC/PE/BO 가장 덜 restrictive 원칙.`,
+        ].filter(Boolean).join("\n"),
+        source_document: sourceDoc,
+        last_verified_at: now,
+      });
+    }
+  }
+  console.log(`  total fanout: ${newRegs.length} (EU ${euPrimary.length}×4 + US ${usPrimary.length}×4)`);
 
   // 기존 Andean source 삭제 + 새 데이터 추가.
   const filtered = all.filter((r) => {
     if (!ANDEAN_COUNTRIES.includes(r.country_code)) return true;
-    // Andean country 의 기존 Decisión 833 fanout 만 제거. MFDS (3안) 등 다른 source 보존.
     return !r.source_document.includes("Comunidad Andina Decisión 833");
   });
   const final = [...filtered, ...newRegs];
