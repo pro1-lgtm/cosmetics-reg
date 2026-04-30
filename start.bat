@@ -5,6 +5,13 @@ title cosmetics-reg
 
 REM .bat file uses ASCII-only to avoid Windows cmd codepage issues.
 REM Korean messages are emitted by Node (launch.cjs), which speaks UTF-8.
+REM
+REM First-run on fresh PC:
+REM   1. Auto-download portable Node.js v22 (~28 MB) if not installed
+REM   2. npm install (auto, ~1-2 min, ~300 MB)
+REM   3. npm run build (auto, ~30 sec)
+REM   4. Start localhost:3010 + open browser
+REM Subsequent runs: skip 1-3, go straight to step 4.
 
 REM Step 1: Use system Node if installed
 where node >nul 2>nul
@@ -20,8 +27,11 @@ if exist "%~dp0node-portable\node.exe" (
 
 REM Step 3: Download portable Node.js (no admin rights needed)
 echo.
-echo Node.js not found on this system.
-echo Downloading portable Node.js v22.13.1 (about 28 MB) ...
+echo ==================================================
+echo  First run: Node.js auto-install (~28 MB)
+echo ==================================================
+echo.
+echo Downloading portable Node.js v22.13.1 ...
 echo.
 
 set "NODE_VERSION=v22.13.1"

@@ -14,7 +14,8 @@ const PORT = 3010;
 const BASE = `http://localhost:${PORT}`;
 const ROOT = path.resolve(__dirname, "..");
 const DATA_DIR = path.join(ROOT, "public", "data");
-const DATA_FILES = ["meta.json", "countries.json", "ingredients.json", "regulations.json", "quarantine.json"];
+// 19국 split — countries.json 받은 다음 cc 별 regulations/{cc}.json 받음.
+const TOPLEVEL_DATA_FILES = ["meta.json", "countries.json", "ingredients.json", "quarantine.json", "kcia-articles.json", "sources-pdf.json"];
 const DATA_BASE_URL = "https://raw.githubusercontent.com/pro1-lgtm/cosmetics-reg/main/public/data";
 process.chdir(ROOT);
 
@@ -39,9 +40,16 @@ function run(cmd, args) {
 
 function ensureInstalled() {
   if (existsSync("node_modules")) return;
-  console.log("의존성 설치 중 (1-2분)...");
+  console.log("");
+  console.log("==================================================");
+  console.log(" 첫 실행: 의존성 설치 (1-2분, 인터넷 필요)");
+  console.log("==================================================");
+  console.log("");
   if (run("npm", ["install"]) !== 0) {
-    console.error("npm install 실패.");
+    console.error("");
+    console.error("[X] npm install 실패.");
+    console.error("    - 인터넷 연결 확인");
+    console.error("    - Windows 면 antivirus 가 npm 차단 안 하는지 확인");
     process.exit(1);
   }
 }
@@ -74,9 +82,9 @@ function autoUpdate() {
 
 function ensureBuilt() {
   if (existsSync(path.join("out", "index.html"))) return;
-  console.log("빌드 중 (~30초)...");
+  console.log("정적 사이트 빌드 중 (~30초)...");
   if (run("npm", ["run", "build"]) !== 0) {
-    console.error("빌드 실패.");
+    console.error("[X] 빌드 실패.");
     process.exit(1);
   }
 }
@@ -106,15 +114,44 @@ function downloadFile(url, dest, redirectCount = 0) {
 
 async function ensureData() {
   if (existsSync(path.join(DATA_DIR, "meta.json"))) return;
-  console.log("데이터 다운로드 중 (~10MB)...");
+  console.log("데이터 다운로드 중 (~70MB, 1-2분)...");
   mkdirSync(DATA_DIR, { recursive: true });
-  for (const f of DATA_FILES) {
+  mkdirSync(path.join(DATA_DIR, "regulations"), { recursive: true });
+
+  // 1) top-level files (meta + countries + ingredients + quarantine 등)
+  for (const f of TOPLEVEL_DATA_FILES) {
     try {
       await downloadFile(`${DATA_BASE_URL}/${f}`, path.join(DATA_DIR, f));
     } catch (e) {
-      console.error(`데이터 다운로드 실패 (${f}): ${e instanceof Error ? e.message : e}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      // 옵션 파일 (kcia/sources-pdf) 은 fail 허용
+      if (f === "kcia-articles.json" || f === "sources-pdf.json") {
+        console.warn(`  - ${f} skip (${msg})`);
+        continue;
+      }
+      console.error(`데이터 다운로드 실패 (${f}): ${msg}`);
       process.exit(1);
     }
+  }
+
+  // 2) regulations/{cc}.json — countries.json 의 code 목록 기반.
+  try {
+    const fs = require("node:fs");
+    const countries = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "countries.json"), "utf8")).rows;
+    let downloaded = 0;
+    for (const c of countries) {
+      const file = `regulations/${c.code}.json`;
+      try {
+        await downloadFile(`${DATA_BASE_URL}/${file}`, path.join(DATA_DIR, file));
+        downloaded++;
+      } catch (e) {
+        console.warn(`  - ${file} skip (${e instanceof Error ? e.message : e})`);
+      }
+    }
+    console.log(`  ✓ regulations: ${downloaded}/${countries.length} 국가`);
+  } catch (e) {
+    console.error(`regulations 다운로드 실패: ${e instanceof Error ? e.message : e}`);
+    process.exit(1);
   }
 }
 
