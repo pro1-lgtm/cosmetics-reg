@@ -1,12 +1,27 @@
 {
   "RDC_83_2016 (배합금지 성분 목록).pdf": {
     "sha256": "c728358e950cc7f757d21de97c57103cf001fe16d378d76dc0a9d19f42f684de",
-    "parsed_at": "2026-04-30T07:20:14.422Z",
+    "parsed_at": "2026-04-30T07:33:42.812Z",
     "entry_count": 772
   },
   "RDC_03_2012 (배합한도 제한 성분 목록).pdf": {
     "sha256": "90efe3a7bf5a0cd905e9f1073d55b5e3f7202c28af8c64c3554d9779a1e6c084",
-    "parsed_at": "2026-04-30T07:20:14.422Z",
+    "parsed_at": "2026-04-30T07:33:42.812Z",
     "entry_count": 34
+  },
+  "RDC_29_2012 (허용 보존제 목록).pdf": {
+    "sha256": "9f4674ffd26cfde4380d7dacb7da4290505811e65867bb3a7d8608fc1394fbb2",
+    "parsed_at": "2026-04-30T07:33:42.812Z",
+    "entry_count": 51
+  },
+  "RDC_628_2022 (개인위생 제품, 화장품 및 향수의 허용 착색물질 목록).pdf": {
+    "sha256": "a0ac8d2cf6a8423e6a06de45f6f0d353ea1ad97c9fd9187be7a941e0ce496947",
+    "parsed_at": "2026-04-30T07:33:42.812Z",
+    "entry_count": 145
+  },
+  "RDC_600_2022 (개인 위생용품, 화장품 및 향수 제품에 허용되는 자외선 필터 목록).pdf": {
+    "sha256": "69a1b4e179f8d492011822c5fbadabe149d979bde11c14bd5c30e1af8a01116c",
+    "parsed_at": "2026-04-30T07:33:42.812Z",
+    "entry_count": 15
   }
 }

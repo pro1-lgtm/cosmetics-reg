@@ -29,7 +29,7 @@ interface RdcSpec {
   status: "banned" | "restricted" | "listed";
   function_category: string | null;
   description: string;
-  parser: "ref-cas" | "positive-list";
+  parser: "ref-cas" | "positive-list" | "color-index";
   // Mercosul 결의 채택분 — BR ANVISA RDC = AR ANMAT Disposición 동일 list.
   // BR 만 채택한 것은 ["BR"], Mercosul 공통은 ["BR", "AR"].
   countries: string[];
@@ -58,9 +58,9 @@ const RDCS: RdcSpec[] = [
   { filename: "RDC_628_2022 (개인위생 제품, 화장품 및 향수의 허용 착색물질 목록).pdf",
     status: "listed", function_category: "색소",
     description: "RDC 628/2022 — 허용 착색물질 (positive list)",
-    parser: "positive-list",
-    countries: ["BR"],
-    mercosul_basis: null },
+    parser: "color-index",
+    countries: ["BR", "AR"],
+    mercosul_basis: "MERCOSUL GMC 16/2012" },
   { filename: "RDC_600_2022 (개인 위생용품, 화장품 및 향수 제품에 허용되는 자외선 필터 목록).pdf",
     status: "listed", function_category: "자외선차단제",
     description: "RDC 600/2022 — 허용 자외선 필터 목록 (positive list)",
@@ -183,51 +183,117 @@ function parseRefCas(text: string): Entry[] {
   });
 }
 
-// RDC 29/628/600 — positive list 표. INCI 또는 CI 번호 + CAS + max conc.
+// RDC 29/628/600 — positive list 표.
+// 형식: `Nº ORD <number>\n` 헤더 + 다중 라인 substance description (포르투갈어 + INCI in parens) +
+//   `X.X%` 또는 `(número CAS NN-NN-N)` 등의 메타.
+// INCI 추출: 대문자만 있는 라인 또는 `(INCI_UPPER, INCI_UPPER)` 패턴 (포르투갈어 이름은 lowercase 시작).
 function parsePositiveList(text: string): Entry[] {
   const out: Entry[] = [];
   const cleaned = cleanText(text);
-  // CAS 위치 또는 CI 번호 위치 찾기. 각 위치 주변에 substance.
-  const casRe = /(\d{1,7}-\d{2,4}-\d)/g;
-  const casPositions: { cas: string; pos: number }[] = [];
-  let m;
-  while ((m = casRe.exec(cleaned))) casPositions.push({ cas: m[1], pos: m.index });
-  for (let i = 0; i < casPositions.length; i++) {
-    const cur = casPositions[i];
-    const start = i > 0 ? casPositions[i - 1].pos + casPositions[i - 1].cas.length : 0;
-    const block = cleaned.slice(start, cur.pos + cur.cas.length);
-    let substance = block
-      .replace(/\d{1,7}-\d{2,4}-\d/g, " ")  // CAS 제거
-      .replace(/\b\d{3}-\d{3}-\d\b/g, " ")   // EINECS 제거
-      .replace(/(?:^|\s)\d{1,4}\s+/g, " ")    // ref 제거
-      .replace(/\s+/g, " ")
-      .trim();
-    // tail 부분만 의미있음 — substance 시작점 추정 위해 line break 직후부터
-    const lineBreak = block.lastIndexOf("\n", cur.pos - start - 50);
-    if (lineBreak > 0) {
-      substance = block.slice(lineBreak)
-        .replace(/\d{1,7}-\d{2,4}-\d/g, " ")
-        .replace(/\b\d{3}-\d{3}-\d\b/g, " ")
-        .replace(/(?:^|\s)\d{1,4}\s+/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
+  const lines = cleaned.split(/\r?\n/);
+
+  // entry 분할: 라인 단독 숫자 (Nº ORD 헤더) — 이 다음부터 다음 단독 숫자까지가 한 entry.
+  // 헤더 lines (Nº/ORD/SUBSTÂNCIA/MÁXIMA 등) skip.
+  const isHeaderLine = (s: string) =>
+    /^(Nº|ORD|N[°º]\s*ORD|SUBST[ÂA]NCIA|M[ÁA]XIMA|CONCENTRA[ÇC][ÃA]O|AUTORIZADA|LIMITA[ÇC][ÕO]ES|CONDI[ÇC][ÕO]ES|USO|ADVERT[ÊE]NCIAS|LISTA DE|REGULAMENTO|Para os efeitos|ANEXO|ADENDO|^\d+\s+(of|de)\s+\d+)/i.test(s);
+
+  type Block = { ord: number; bodyLines: string[] };
+  const blocks: Block[] = [];
+  let cur: Block | null = null;
+  for (const raw of lines) {
+    const t = raw.trim();
+    if (!t) continue;
+    // ord header: 라인 단독 숫자
+    const ordM = t.match(/^(\d{1,4})$/);
+    if (ordM) {
+      const n = Number(ordM[1]);
+      // 합리적 범위 (RDC 29: 1~50, RDC 628: 1~200, RDC 600: 1~50)
+      if (n >= 1 && n <= 999) {
+        if (cur) blocks.push(cur);
+        cur = { ord: n, bodyLines: [] };
+        continue;
+      }
     }
-    if (!substance || substance.length < 3 || substance.length > 200) continue;
-    const letters = (substance.match(/[A-Za-z]/g) ?? []).length;
-    if (letters < 4) continue;
-    // 농도 추출
-    const concM = block.match(/(\d+(?:\.\d+)?)\s*%/);
-    const maxConc = concM ? Number(concM[1]) : null;
-    out.push({ inci: substance, cas: cur.cas, ref: null, max_concentration: maxConc, conditions: null });
+    if (!cur) continue;
+    if (isHeaderLine(t)) continue;
+    cur.bodyLines.push(t);
   }
-  // dedupe
+  if (cur) blocks.push(cur);
+
+  for (const b of blocks) {
+    const body = b.bodyLines.join(" ").replace(/\s+/g, " ");
+    if (body.length < 5) continue;
+    // INCI 추출 — 괄호 안 대문자 표기. e.g. (BENZOIC ACID, SODIUM BENZOATE) 또는 (SALICYLIC ACID & salts).
+    const inciM = body.match(/\(([A-Z][A-Z0-9\s,'\-&./]+(?:&[\s\w]+)?)\)/);
+    let inci: string | null = null;
+    if (inciM) {
+      // 첫 substance 이름 추출 (콤마/& 전까지)
+      inci = inciM[1].split(/,\s*|\s+&\s+/)[0].trim();
+      // 너무 짧거나 noisy — skip
+      if (inci.length < 3) inci = null;
+    }
+    // INCI 없으면 첫 라인의 포르투갈어 이름 사용
+    if (!inci) {
+      const firstLine = b.bodyLines[0]?.trim() ?? "";
+      // 포르투갈어 이름 first segment (괄호 전)
+      const ptName = firstLine.split("(")[0].trim();
+      if (ptName.length >= 3 && ptName.length <= 200) inci = ptName;
+    }
+    if (!inci) continue;
+    // 길이/letter 검증
+    if (inci.length < 3 || inci.length > 200) continue;
+    const letters = (inci.match(/[A-Za-z]/g) ?? []).length;
+    if (letters < 3) continue;
+
+    // CAS 추출
+    const casM = body.match(/(\d{1,7}-\d{2,4}-\d)/);
+    const cas = casM ? casM[1] : null;
+    // max conc 추출 — 첫 % 패턴
+    const concM = body.match(/(\d+(?:[,.]\d+)?)\s*%/);
+    const maxConc = concM ? Number(concM[1].replace(",", ".")) : null;
+
+    out.push({
+      inci,
+      cas,
+      ref: String(b.ord),
+      max_concentration: maxConc,
+      conditions: null,
+    });
+  }
+  // dedupe by (inci lower, cas)
   const seen = new Set<string>();
   return out.filter((e) => {
-    const k = `${e.inci.toLowerCase()}|${e.cas}`;
+    const k = `${e.inci.toLowerCase()}|${e.cas ?? ""}`;
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
   });
+}
+
+// RDC 628 — Color Index 5-digit + 색상명(PT) + 컬럼 마커. INCI 포맷: "CI NNNNN".
+function parseColorIndex(text: string): Entry[] {
+  const out: Entry[] = [];
+  const cleaned = cleanText(text);
+  // 5자리 CI + COLOR_NAME(PT) + X 마커 패턴. 같은 라인 또는 다음 라인.
+  const re = /\b(\d{5})\s+(VERDE|AMARELO|LARANJA|VERMELHO|MARROM|VIOLETA|AZUL|MARRON|NEGRO|PRETO|BRANCO|ROSA|CINZA)\b/g;
+  let m;
+  const seen = new Set<string>();
+  while ((m = re.exec(cleaned))) {
+    const ci = m[1];
+    if (seen.has(ci)) continue;
+    seen.add(ci);
+    // 농도 추출 — 같은 line 또는 다음 100자 내 "máxima ... X%"
+    const after = cleaned.slice(m.index, m.index + 200);
+    const concM = after.match(/(\d+(?:[,.]\d+)?)\s*%/);
+    out.push({
+      inci: `CI ${ci}`,
+      cas: null,
+      ref: ci,
+      max_concentration: concM ? Number(concM[1].replace(",", ".")) : null,
+      conditions: null,
+    });
+  }
+  return out;
 }
 
 async function main() {
@@ -267,7 +333,10 @@ async function main() {
       continue;
     }
     const text = await extractText(rdc.filename);
-    const entries = rdc.parser === "ref-cas" ? parseRefCas(text) : parsePositiveList(text);
+    const entries =
+      rdc.parser === "ref-cas" ? parseRefCas(text) :
+      rdc.parser === "color-index" ? parseColorIndex(text) :
+      parsePositiveList(text);
     console.log(`  ${(text.length / 1024).toFixed(0)}KB text → ${entries.length} entries`);
     if (entries.length < 5) {
       console.warn(`  ! 너무 적음 — fingerprint 미저장`);
