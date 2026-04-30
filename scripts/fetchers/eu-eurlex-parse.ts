@@ -93,8 +93,9 @@ function parseAnnexRows(sectionText: string): AnnexEntry[] {
   // "1\t" or "1 " 로 시작하는 row (PDF text 에선 종종 \n 으로 분리)
   // ref number 는 1, 2, 3, ... 순차. 같은 라인에서 다음 ref 까지가 한 entry.
   const cleaned = sectionText.replace(/-- \d+ of \d+ --/g, " ").replace(/Official Journ?al[\s\S]*?\d{2}\.\d{2}\.\d{4}/g, " ");
-  // ref pattern: "\n N \t" or "\n N "
-  const refRe = /(?:^|\n)\s*(\d{1,4})\s+(?=\S)/g;
+  // ref pattern: "\n N \t" or "\n N " — 다음 즉시 농도/단위 false positive 거부.
+  // 예: "1 % concentration" 의 "1" 은 ref 아님.
+  const refRe = /(?:^|\n)\s*(\d{1,4})\s+(?!%|μg|mg|kg|years|year|of\s)(?=\S)/g;
   const positions: { ref: number; pos: number }[] = [];
   let m;
   while ((m = refRe.exec(cleaned))) {
@@ -123,12 +124,19 @@ function parseAnnexRows(sectionText: string): AnnexEntry[] {
       break;
     }
   }
+  // 두 단계 fallback. 1) 좁은 gap<5 로 시작 (II/V/VI 처럼 dense ref 영역).
+  // 2) 그 후 lastRef 가 정체되면 — 큰 gap 점프 (≤30) 로도 accept 하되 block 에 CAS 또는
+  //    EC 번호가 있는 경우만 (실 entry 인 증거). amendment 로 ref 결번된 III 적용.
   const filtered: { ref: number; pos: number }[] = [];
   if (startIdx >= 0) {
     let lastRef = 0;
     for (let i = startIdx; i < positions.length; i++) {
       const p = positions[i];
-      if (lastRef === 0 || p.ref === lastRef + 1 || (p.ref > lastRef && p.ref - lastRef < 5)) {
+      const block = cleaned.slice(p.pos, positions[i + 1]?.pos ?? cleaned.length);
+      const hasCasOrEc = /\b\d{1,7}-\d{2}-\d\b|\b\d{3}-\d{3}-\d\b/.test(block);
+      const dense = lastRef === 0 || p.ref === lastRef + 1 || (p.ref > lastRef && p.ref - lastRef < 5);
+      const sparseWithCas = hasCasOrEc && p.ref > lastRef && p.ref - lastRef <= 30;
+      if (dense || sparseWithCas) {
         filtered.push(p);
         lastRef = p.ref;
       }
@@ -146,9 +154,14 @@ function parseAnnexRows(sectionText: string): AnnexEntry[] {
     // EC pattern (NNN-NNN-N)
     const ecMatch = body.match(/(\d{3}-\d{3}-\d)/);
     const ec = ecMatch?.[1] ?? null;
-    // substance = body 에서 CAS/EC 제거 + tail 정리
-    let substance = body;
-    if (cas) substance = substance.replace(cas, "").trim();
+    // substance 추출 — 긴 block (Annex III 등 conditions 인라인) 처리:
+    // CAS 가 있으면 CAS 직전까지 (앞부분) substance 로. 없으면 body 첫 250 chars.
+    let substance: string;
+    if (casMatch) {
+      substance = body.slice(0, casMatch.index).trim();
+    } else {
+      substance = body.slice(0, 250).trim();
+    }
     if (ec) substance = substance.replace(ec, "").trim();
     substance = substance.replace(/\s+/g, " ").trim();
     if (!substance || substance.length < 2 || substance.length > 300) continue;
