@@ -76,5 +76,17 @@
     "parsed_at": "2026-04-30T08:05:33.723Z",
     "entry_count": 0,
     "article_no": "14195"
+  },
+  "public/data/raw-attach/kcia-17600/붙임1. 중검원 「화장품안전기술규범(2015년판)」 정오표 발표에 관한 통지_국문.pdf": {
+    "sha256": "d735189602a340ac6601f4460b9cc8e0ec6052edbd1b46bfff23c5f8eb418834",
+    "parsed_at": "2026-05-26T20:31:19.900Z",
+    "entry_count": 0,
+    "article_no": "17600"
+  },
+  "public/data/raw-attach/kcia-17599/붙임1. 「o-페닐페놀 및 그 염류」 등 3개 표준을 화장품안전기술규범에 포함하는 것에 관한 공고(2026년 제48호)_국문.pdf": {
+    "sha256": "824a13f282460ad4b9566b66f2e2043ba22a0784ed02c9d7df6dc71f915d3bf2",
+    "parsed_at": "2026-05-26T20:31:19.900Z",
+    "entry_count": 0,
+    "article_no": "17599"
   }
 }
